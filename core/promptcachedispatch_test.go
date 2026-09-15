@@ -314,6 +314,54 @@ func TestPromptCacheChatRequest_PassesThroughWhenDisabled(t *testing.T) {
 	assert.Nil(t, promptCacheChatRequest(nil, promptCacheOn(), schemas.Anthropic, nil))
 }
 
+// TestPromptCacheChatRequest_CachePointOnlyReachesBedrock covers a Bedrock -> OpenAI fallback on the same shared request.
+func TestPromptCacheChatRequest_CachePointOnlyReachesBedrock(t *testing.T) {
+	req := chatReqWithText("stable prefix")
+	req.Input[0].Content.ContentBlocks = append(req.Input[0].Content.ContentBlocks, schemas.ChatContentBlock{CachePoint: &schemas.CachePoint{Type: "default"}})
+
+	assert.Same(t, req, promptCacheChatRequest(nil, nil, schemas.Bedrock, req))
+
+	out := promptCacheChatRequest(nil, nil, schemas.OpenAI, req)
+	require.NotSame(t, req, out)
+	assert.Len(t, out.Input[0].Content.ContentBlocks, 1)
+	assert.Len(t, req.Input[0].Content.ContentBlocks, 2, "the shared request lost its cachePoint; a Bedrock fallback would not see it")
+}
+
+// TestPromptCacheChatRequest_CachePointGatedOnModel covers the second half of the gate:
+// Converse itself rejects a cachePoint on a model that does not publish support for one,
+// and the datasheet is what decides, with the model name only the fallback.
+func TestPromptCacheChatRequest_CachePointGatedOnModel(t *testing.T) {
+	withCachePoint := func(model string) *schemas.BifrostChatRequest {
+		req := chatReqWithText("stable prefix")
+		req.Provider = schemas.Bedrock
+		req.Model = model
+		req.Input[0].Content.ContentBlocks = append(req.Input[0].Content.ContentBlocks, schemas.ChatContentBlock{CachePoint: &schemas.CachePoint{Type: "default"}})
+		return req
+	}
+
+	llama := withCachePoint("meta.llama3-70b-instruct-v1:0")
+	out := promptCacheChatRequest(nil, nil, schemas.Bedrock, llama)
+	require.NotSame(t, llama, out)
+	assert.Len(t, out.Input[0].Content.ContentBlocks, 1, "Converse rejects a cachePoint on a model without support for one")
+	assert.Len(t, llama.Input[0].Content.ContentBlocks, 2, "the shared request was mutated")
+
+	schemas.SetCapabilityResolver(func(_ schemas.ModelProvider, model string) *schemas.ModelCapabilities {
+		if model == "meta.llama3-70b-instruct-v1:0" {
+			return &schemas.ModelCapabilities{SupportsCachePoint: schemas.Ptr(true)}
+		}
+		return &schemas.ModelCapabilities{SupportsCachePoint: schemas.Ptr(false)}
+	})
+	t.Cleanup(func() { schemas.SetCapabilityResolver(nil) })
+
+	assert.Same(t, llama, promptCacheChatRequest(nil, nil, schemas.Bedrock, llama),
+		"a datasheet row saying yes must win over the name-based fallback")
+
+	claude := withCachePoint("anthropic.claude-3-5-haiku-20241022-v1:0")
+	out = promptCacheChatRequest(nil, nil, schemas.Bedrock, claude)
+	require.NotSame(t, claude, out)
+	assert.Len(t, out.Input[0].Content.ContentBlocks, 1, "a datasheet row saying no must win too")
+}
+
 // TestPromptCacheDispatch_CallerMarkerSurvivesUnchanged proves the two guarantees
 // compose: a caller that set its own marker gets the request through untouched, and
 // nothing extra is added on top of it.
