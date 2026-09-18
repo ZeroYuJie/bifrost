@@ -58,15 +58,10 @@ type Turn struct {
 	// questionRole is the role the final request message actually carried.
 	// NewTurn accepts an assistant turn there, and history has to file it under
 	// the role it arrived with rather than assuming "user".
-	questionRole string
-	messages     []schemas.ResponsesMessage
-	config       *schemas.WarpConfig
-	chat         ChatFunc
-	// logs and semantic are snapshotted with chat so the three cannot drift
-	// mid-turn: the searcher holds its own reference to a reader, and a mismatched
-	// pair searches one backend and hydrates from another.
-	logs             LogReader
-	semantic         *SemanticSearcher
+	questionRole     string
+	messages         []schemas.ResponsesMessage
+	config           *schemas.WarpConfig
+	chat             ChatFunc
 	utcOffsetMinutes int
 	timezone         string
 }
@@ -98,16 +93,15 @@ func (s *Service) NewTurn(ctx context.Context, request *ChatRequest, bodyBytes i
 	if isNew {
 		conversationID = uuid.NewString()
 	}
-	// One snapshot for both. Read separately, a turn could keep a usable chat
-	// func while the reader went nil underneath it, and the first log tool the
-	// model reached for dereferenced nil inside the agent.
-	chat, logs, semantic := s.turnDeps(ctx, config, conversationID)
+	// One snapshot for both, so a turn cannot keep a usable chat func while the
+	// reader went nil underneath it.
+	chat, logs, _ := s.turnDeps(ctx, config, conversationID)
 	if chat == nil {
 		return nil, ErrNoModelClient
 	}
-	// Refused here rather than at the tool call. Every tool this agent has reads
-	// logs, so a turn without a reader cannot answer anything - failing now gives
-	// the caller the same 503 reason the route already reports.
+	// Refused here rather than mid-turn: CanChat already reports a Warp with no
+	// log reader as unavailable, and failing now gives the caller the same 503
+	// reason the route reports instead of a turn that cannot answer anything.
 	if logs == nil {
 		return nil, ErrUnavailable
 	}
@@ -122,8 +116,6 @@ func (s *Service) NewTurn(ctx context.Context, request *ChatRequest, bodyBytes i
 		messages:       messages,
 		config:         config,
 		chat:           chat,
-		logs:           logs,
-		semantic:       semantic,
 		// Sanitized here, once, since this is the one place a raw client value
 		// exists - everything downstream (NewAgent, systemInstructions) trusts
 		// what it's handed rather than re-validating.
@@ -152,11 +144,7 @@ func (s *Service) RunTurn(ctx context.Context, turn *Turn, sink func(Event) bool
 	// The scope is read off the snapshotted context, same as the row-level
 	// queryscope, so it is a fact about who asked rather than anything the
 	// request body could claim.
-	// All three from the turn, not re-read here: chat, the reader and the
-	// searcher were snapshotted together at NewTurn, so a SetLogReader landing
-	// mid-turn cannot leave the agent searching one backend while it hydrates
-	// details from another - or hand it a nil reader it will dereference.
-	agent := NewAgent(turn.chat, s.costFuncFor(turn.config), turn.logs, s.governance, ScopeFromContext(runCtx), turn.config, turn.utcOffsetMinutes, turn.timezone, turn.semantic)
+	agent := NewAgent(turn.chat, s.costFuncFor(turn.config), s.mcp, s.mcpTools, ScopeFromContext(runCtx), turn.config, turn.utcOffsetMinutes, turn.timezone)
 	agent.questionsAsked = turn.questionsAsked
 	events := make(chan Event, 16)
 	go agent.Run(runCtx, turn.messages, events)
