@@ -7861,6 +7861,13 @@ func (bifrost *Bifrost) handleProviderRequest(provider schemas.Provider, config 
 		response.RerankResponse = rerankResponse
 	case schemas.DecisionRequest:
 		decisionResponse, bifrostError := provider.Decision(req.Context, key, req.BifrostRequest.DecisionRequest)
+		// Any provider without native decision support returns unsupported_operation;
+		// emulate the judgment through that provider's chat model (tool-calling /
+		// structured output). Covers both an LLM named as the decision model and an
+		// LLM reached as a fallback - both flow through this one case.
+		if isUnsupportedOperation(bifrostError) {
+			decisionResponse, bifrostError = bifrost.emulateDecisionViaChat(req.Context, provider, key, req.BifrostRequest.DecisionRequest)
+		}
 		if bifrostError != nil {
 			return nil, bifrostError
 		}
