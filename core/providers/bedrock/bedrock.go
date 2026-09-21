@@ -1847,7 +1847,7 @@ func (provider *BedrockProvider) Responses(ctx *schemas.BifrostContext, key sche
 		convTracer.EndSpan(convHandle, schemas.SpanStatusOk, "")
 	}
 
-	bifrostResponse.Model = request.Model
+	bifrostResponse.Model = responseModel(ctx, request.Model)
 
 	// Set ExtraFields
 	bifrostResponse.ExtraFields.Latency = latency.Milliseconds()
@@ -1957,7 +1957,8 @@ func (provider *BedrockProvider) ResponsesStream(ctx *schemas.BifrostContext, po
 
 		// Create stream state for stateful conversions (used by Converse API path)
 		streamState := acquireBedrockResponsesStreamState()
-		streamState.Model = &request.Model
+		responseModelName := responseModel(ctx, request.Model)
+		streamState.Model = &responseModelName
 		streamState.Ctx = ctx
 		defer releaseBedrockResponsesStreamState(streamState)
 
@@ -2231,7 +2232,7 @@ func (provider *BedrockProvider) Embedding(ctx *schemas.BifrostContext, key sche
 		if titanConvTracer != nil {
 			titanConvTracer.EndSpan(titanConvHandle, schemas.SpanStatusOk, "")
 		}
-		bifrostResponse.Model = request.Model
+		bifrostResponse.Model = responseModel(ctx, request.Model)
 
 	case "cohere":
 		var cohereResp BedrockCohereEmbeddingResponse
@@ -2260,7 +2261,7 @@ func (provider *BedrockProvider) Embedding(ctx *schemas.BifrostContext, key sche
 			return nil, providerUtils.EnrichError(ctx, providerUtils.NewBifrostOperationError("error parsing Cohere embedding response", convErr), jsonData, rawResponse, provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
 		}
 		bifrostResponse = converted
-		bifrostResponse.Model = request.Model
+		bifrostResponse.Model = responseModel(ctx, request.Model)
 	}
 
 	// Bedrock Cohere embed models omit token usage from the response body and instead
@@ -2336,7 +2337,7 @@ func (provider *BedrockProvider) Rerank(ctx *schemas.BifrostContext, key schemas
 
 	returnDocuments := request.Params != nil && request.Params.ReturnDocuments != nil && *request.Params.ReturnDocuments
 	bifrostResponse := response.ToBifrostRerankResponse(request.Documents, returnDocuments)
-	bifrostResponse.Model = request.Model
+	bifrostResponse.Model = responseModel(ctx, request.Model)
 
 	// Bedrock returns rerank input token usage only in the X-Amzn-Bedrock-Input-Token-Count
 	// response header (it is absent from the body); backfill Usage from it. (#3917)
@@ -2456,7 +2457,7 @@ func (provider *BedrockProvider) ImageGeneration(ctx *schemas.BifrostContext, ke
 	if convTracer != nil {
 		convTracer.EndSpan(convHandle, schemas.SpanStatusOk, "")
 	}
-	bifrostResponse.Model = request.Model
+	bifrostResponse.Model = responseModel(ctx, request.Model)
 	bifrostResponse.ExtraFields.Latency = latency.Milliseconds()
 	bifrostResponse.ExtraFields.ProviderResponseHeaders = providerResponseHeaders
 
@@ -2544,7 +2545,7 @@ func (provider *BedrockProvider) ImageEdit(ctx *schemas.BifrostContext, key sche
 	if convTracer != nil {
 		convTracer.EndSpan(convHandle, schemas.SpanStatusOk, "")
 	}
-	bifrostResponse.Model = request.Model
+	bifrostResponse.Model = responseModel(ctx, request.Model)
 	bifrostResponse.ExtraFields.Latency = latency.Milliseconds()
 	bifrostResponse.ExtraFields.ProviderResponseHeaders = providerResponseHeaders
 
@@ -2624,7 +2625,7 @@ func (provider *BedrockProvider) ImageVariation(ctx *schemas.BifrostContext, key
 	if convTracer != nil {
 		convTracer.EndSpan(convHandle, schemas.SpanStatusOk, "")
 	}
-	bifrostResponse.Model = request.Model
+	bifrostResponse.Model = responseModel(ctx, request.Model)
 	bifrostResponse.ExtraFields.Latency = latency.Milliseconds()
 	bifrostResponse.ExtraFields.ProviderResponseHeaders = providerResponseHeaders
 
