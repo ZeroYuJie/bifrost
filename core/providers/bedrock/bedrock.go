@@ -1331,6 +1331,9 @@ func (provider *BedrockProvider) ChatCompletion(ctx *schemas.BifrostContext, key
 		convTracer.EndSpan(convHandle, schemas.SpanStatusOk, "")
 	}
 
+	// Echo the caller-facing alias name (if any) instead of the wire model id.
+	bifrostResponse.Model = responseModel(ctx, bifrostResponse.Model)
+
 	// Override finish reason for structured output (Converse API only)
 	if _, ok := ctx.Value(schemas.BifrostContextKeyStructuredOutputToolName).(string); ok {
 		if len(bifrostResponse.Choices) > 0 && bifrostResponse.Choices[0].FinishReason != nil {
@@ -1747,7 +1750,7 @@ func (provider *BedrockProvider) ChatCompletionStream(ctx *schemas.BifrostContex
 				}
 				if response != nil {
 					response.ID = id
-					response.Model = request.Model
+					response.Model = responseModel(ctx, request.Model)
 					response.ExtraFields = schemas.BifrostResponseExtraFields{
 						ChunkIndex: chunkIndex,
 						Latency:    time.Since(lastChunkTime).Milliseconds(),

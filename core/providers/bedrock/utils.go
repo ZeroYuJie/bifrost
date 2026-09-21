@@ -157,6 +157,18 @@ func resolveBedrockARN(ctx *schemas.BifrostContext, key schemas.Key) string {
 	return ""
 }
 
+// responseModel returns the model name exposed in responses. When the request
+// model was resolved through a key alias, the caller-facing alias key is echoed
+// back instead of the wire identifier — for application inference profiles the
+// wire id is an opaque resource id that means nothing to callers. Falls back
+// to the wire model when no alias matched.
+func responseModel(ctx *schemas.BifrostContext, wireModel string) string {
+	if ra := schemas.GetResolvedAlias(ctx); ra != nil && ra.Key != "" {
+		return ra.Key
+	}
+	return wireModel
+}
+
 var (
 	invalidCharRegex = regexp.MustCompile(`[^a-zA-Z0-9\s\-\(\)\[\]]`)
 	multiSpaceRegex  = regexp.MustCompile(`\s{2,}`)
