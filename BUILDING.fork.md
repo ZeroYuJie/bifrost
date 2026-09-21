@@ -29,3 +29,22 @@ CGO_ENABLED=1 go build \
 
 The `go mod edit -replace` changes are local build-tree state — do not commit
 them; keep the fork diff limited to the patch itself.
+
+## Syncing upstream
+
+This branch is a private patch branch (no PR upstream). To keep it current:
+
+```bash
+git fetch origin
+git checkout main && git merge --ff-only origin/main
+git push fork main
+git checkout fix/bedrock-alias-response-model
+git rebase main
+git push fork fix/bedrock-alias-response-model --force-with-lease
+```
+
+Conflicts, if any, will be near the `responseModel(...)` call sites in
+`core/providers/bedrock/bedrock.go` — resolve by keeping the patched call.
+Then rebuild and redeploy per the steps above. If upstream ever implements
+equivalent behavior (response model echoes the caller-facing name), retire
+this branch and go back to stock releases.
