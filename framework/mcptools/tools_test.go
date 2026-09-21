@@ -120,6 +120,18 @@ type fakeLogReader struct {
 	// behind distinct ids. Unset behaves like a real store asked for a row that
 	// does not exist, rather than panicking through the embedded nil stub.
 	getLogFunc func(ctx context.Context, id string) (*logstore.Log, error)
+
+	sessionResult    *logstore.SessionDetailResult
+	sessionSummary   *logstore.SessionSummaryResult
+	sessionIDSeen    string
+	droppedRequests  int64
+	mcpLogs          []logstore.MCPToolLog
+	mcpLogByID       map[string]*logstore.MCPToolLog
+	mcpStats         *logstore.MCPToolLogStats
+	mcpHistogram     *logstore.MCPHistogramResult
+	mcpCostHistogram *logstore.MCPCostHistogramResult
+	mcpTopTools      *logstore.MCPTopToolsResult
+	mcpSearchFilters *logstore.MCPToolLogSearchFilters
 }
 
 func (f *fakeLogReader) GetLog(ctx context.Context, id string) (*logstore.Log, error) {
@@ -366,6 +378,107 @@ func (f *fakeLogReader) GetAvailableStopReasons(_ context.Context, _ int, _ stri
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.availableStopReasons, nil
+}
+
+func (f *fakeLogReader) GetSessionLogs(ctx context.Context, sessionID string, pagination *logstore.PaginationOptions) (*logstore.SessionDetailResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sawContext = ctx
+	f.sessionIDSeen = sessionID
+	if f.sessionResult != nil {
+		return f.sessionResult, nil
+	}
+	return &logstore.SessionDetailResult{SessionID: sessionID, Pagination: *pagination}, nil
+}
+
+func (f *fakeLogReader) GetSessionSummary(ctx context.Context, sessionID string) (*logstore.SessionSummaryResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sawContext = ctx
+	f.sessionIDSeen = sessionID
+	if f.sessionSummary != nil {
+		return f.sessionSummary, nil
+	}
+	return &logstore.SessionSummaryResult{SessionID: sessionID}, nil
+}
+
+func (f *fakeLogReader) GetDroppedRequests(ctx context.Context) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sawContext = ctx
+	return f.droppedRequests
+}
+
+func (f *fakeLogReader) GetMCPToolLog(ctx context.Context, id string) (*logstore.MCPToolLog, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sawContext = ctx
+	if entry, ok := f.mcpLogByID[id]; ok {
+		return entry, nil
+	}
+	return nil, fmt.Errorf("no mcp log found with id %s", id)
+}
+
+func (f *fakeLogReader) SearchMCPToolLogs(ctx context.Context, filters *logstore.MCPToolLogSearchFilters, pagination *logstore.PaginationOptions) (*logstore.MCPToolLogSearchResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sawContext = ctx
+	f.mcpSearchFilters = filters
+	result := &logstore.MCPToolLogSearchResult{Logs: f.mcpLogs}
+	if pagination != nil {
+		result.Pagination = *pagination
+		result.Pagination.TotalCount = int64(len(f.mcpLogs))
+	}
+	return result, nil
+}
+
+func (f *fakeLogReader) GetMCPToolLogStats(ctx context.Context, filters *logstore.MCPToolLogSearchFilters) (*logstore.MCPToolLogStats, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sawContext = ctx
+	f.mcpSearchFilters = filters
+	if f.mcpStats != nil {
+		return f.mcpStats, nil
+	}
+	return &logstore.MCPToolLogStats{}, nil
+}
+
+func (f *fakeLogReader) GetMCPHistogram(ctx context.Context, filters logstore.MCPToolLogSearchFilters, bucketSizeSeconds int64) (*logstore.MCPHistogramResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sawContext = ctx
+	f.histogramBucket = bucketSizeSeconds
+	copied := filters
+	f.mcpSearchFilters = &copied
+	if f.mcpHistogram != nil {
+		return f.mcpHistogram, nil
+	}
+	return &logstore.MCPHistogramResult{BucketSizeSeconds: bucketSizeSeconds}, nil
+}
+
+func (f *fakeLogReader) GetMCPCostHistogram(ctx context.Context, filters logstore.MCPToolLogSearchFilters, bucketSizeSeconds int64) (*logstore.MCPCostHistogramResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sawContext = ctx
+	f.histogramBucket = bucketSizeSeconds
+	copied := filters
+	f.mcpSearchFilters = &copied
+	if f.mcpCostHistogram != nil {
+		return f.mcpCostHistogram, nil
+	}
+	return &logstore.MCPCostHistogramResult{BucketSizeSeconds: bucketSizeSeconds}, nil
+}
+
+func (f *fakeLogReader) GetMCPTopTools(ctx context.Context, filters logstore.MCPToolLogSearchFilters, _ int) (*logstore.MCPTopToolsResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sawContext = ctx
+	copied := filters
+	f.mcpSearchFilters = &copied
+	if f.mcpTopTools != nil {
+		return f.mcpTopTools, nil
+	}
+	return &logstore.MCPTopToolsResult{}, nil
 }
 
 // runTool executes one tool directly against deps, the way toolHandler does
@@ -1260,12 +1373,12 @@ func TestFilterArraysRejectEmptyAndNull(t *testing.T) {
 // told it forgot a field it had actually sent and retried the same shape.
 func TestStringArgRejectsWrongShapes(t *testing.T) {
 	for _, bad := range []any{42.0, nil, "", "   ", []any{"a"}} {
-		_, err := stringArg(map[string]any{"log_id": bad}, "log_id")
+		_, err := stringArg(map[string]any{"log_id": bad}, "log_id", true)
 		require.Error(t, err, "log_id %v must be rejected", bad)
 	}
-	_, err := stringArg(map[string]any{}, "log_id")
+	_, err := stringArg(map[string]any{}, "log_id", true)
 	require.ErrorContains(t, err, "log_id is required")
-	value, err := stringArg(map[string]any{"log_id": "abc"}, "log_id")
+	value, err := stringArg(map[string]any{"log_id": "abc"}, "log_id", true)
 	require.NoError(t, err)
 	require.Equal(t, "abc", value)
 }

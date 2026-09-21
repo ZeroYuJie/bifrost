@@ -3,8 +3,10 @@ package mcptools
 import (
 	"context"
 
+	"github.com/maximhq/bifrost/framework/configstore"
 	"github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/framework/logstore"
+	"gorm.io/gorm"
 )
 
 // LogReader is the slice of the deployment's telemetry these tools are allowed
@@ -61,6 +63,17 @@ type LogReader interface {
 	GetAvailableTeams(ctx context.Context, limit int, query string) ([]KeyPair, error)
 	GetAvailableCustomers(ctx context.Context, limit int, query string) ([]KeyPair, error)
 	GetAvailableBusinessUnits(ctx context.Context, limit int, query string) ([]KeyPair, error)
+
+	GetSessionLogs(ctx context.Context, sessionID string, pagination *logstore.PaginationOptions) (*logstore.SessionDetailResult, error)
+	GetSessionSummary(ctx context.Context, sessionID string) (*logstore.SessionSummaryResult, error)
+	GetDroppedRequests(ctx context.Context) int64
+
+	GetMCPToolLog(ctx context.Context, id string) (*logstore.MCPToolLog, error)
+	SearchMCPToolLogs(ctx context.Context, filters *logstore.MCPToolLogSearchFilters, pagination *logstore.PaginationOptions) (*logstore.MCPToolLogSearchResult, error)
+	GetMCPToolLogStats(ctx context.Context, filters *logstore.MCPToolLogSearchFilters) (*logstore.MCPToolLogStats, error)
+	GetMCPHistogram(ctx context.Context, filters logstore.MCPToolLogSearchFilters, bucketSizeSeconds int64) (*logstore.MCPHistogramResult, error)
+	GetMCPCostHistogram(ctx context.Context, filters logstore.MCPToolLogSearchFilters, bucketSizeSeconds int64) (*logstore.MCPCostHistogramResult, error)
+	GetMCPTopTools(ctx context.Context, filters logstore.MCPToolLogSearchFilters, limit int) (*logstore.MCPTopToolsResult, error)
 }
 
 // KeyPair is an id paired with the name it is known by.
@@ -69,17 +82,54 @@ type KeyPair struct {
 	Name string `json:"name"`
 }
 
-// GovernanceReader is the slice of the config store describe_virtual_key is
-// allowed to read.
+// GovernanceReader is the slice of the config store these tools may reach.
+// configstore.ConfigStore satisfies it structurally. Every method is
+// scope-aware: the caller's ctx narrows which rows come back, the same
+// row-level enforcement LogReader gets.
 //
-// Like LogReader, this is deliberately one method: reviewing what the server
-// can see about how the deployment is governed means reading this interface,
-// not auditing configstore.ConfigStore's whole surface. GetVirtualKey in
-// particular is scope-aware - a caller's ctx narrows which rows it can return,
-// the same row-level enforcement every logstore query gets - so this tool
-// inherits that for free rather than needing its own access check.
+// Writes persist through this interface; GovernanceReloader is what makes a
+// new or edited key live in the in-memory governance store that inference
+// actually consults. A write without a reload leaves a row that cannot
+// authenticate until the next process start.
 type GovernanceReader interface {
 	GetVirtualKey(ctx context.Context, id string) (*tables.TableVirtualKey, error)
+	GetVirtualKeysPaginated(ctx context.Context, params configstore.VirtualKeyQueryParams) ([]tables.TableVirtualKey, int64, error)
+	CreateVirtualKey(ctx context.Context, virtualKey *tables.TableVirtualKey, tx ...*gorm.DB) error
+	UpdateVirtualKey(ctx context.Context, virtualKey *tables.TableVirtualKey, tx ...*gorm.DB) error
+
+	GetTeam(ctx context.Context, id string) (*tables.TableTeam, error)
+	GetTeamsPaginated(ctx context.Context, params configstore.TeamsQueryParams) ([]tables.TableTeam, int64, error)
+	CreateTeam(ctx context.Context, team *tables.TableTeam, tx ...*gorm.DB) error
+
+	GetCustomer(ctx context.Context, id string) (*tables.TableCustomer, error)
+	GetCustomersPaginated(ctx context.Context, params configstore.CustomersQueryParams) ([]tables.TableCustomer, int64, error)
+	CreateCustomer(ctx context.Context, customer *tables.TableCustomer, tx ...*gorm.DB) error
+
+	GetBudget(ctx context.Context, id string, tx ...*gorm.DB) (*tables.TableBudget, error)
+	GetBudgets(ctx context.Context) ([]tables.TableBudget, error)
+	CreateBudget(ctx context.Context, budget *tables.TableBudget, tx ...*gorm.DB) error
+
+	GetProviders(ctx context.Context) ([]tables.TableProvider, error)
+	GetMCPClientsPaginated(ctx context.Context, params configstore.MCPClientsQueryParams) ([]tables.TableMCPClient, int64, error)
+	GetClientConfig(ctx context.Context) (*configstore.ClientConfig, error)
+}
+
+// GovernanceReloader refreshes the in-memory governance cache after a write.
+// Inference reads that cache, not the config store, so a create or update that
+// skips this leaves a row that cannot authenticate. Nil on a deployment with
+// no governance plugin; write tools then persist and report that the cache
+// could not be reloaded.
+type GovernanceReloader interface {
+	ReloadVirtualKey(ctx context.Context, id string) (*tables.TableVirtualKey, error)
+	ReloadTeam(ctx context.Context, id string) (*tables.TableTeam, error)
+	ReloadCustomer(ctx context.Context, id string) (*tables.TableCustomer, error)
+}
+
+// Pinger is a store that can answer whether it is reachable. Config, log and
+// vector stores all satisfy it; get_health calls each independently so a down
+// log store does not hide a healthy config store.
+type Pinger interface {
+	Ping(ctx context.Context) error
 }
 
 // MaxSemanticQueryChars bounds the natural-language query, in characters. The

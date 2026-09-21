@@ -1,18 +1,20 @@
-// Package mcptools hosts the read-only log/metrics/governance query tools on
-// Bifrost's own MCP server, so any virtual-key-authenticated MCP client - not
-// just Warp's dashboard agent - can reach them.
+// Package mcptools hosts Bifrost's own MCP server tools, so any virtual-key-
+// authenticated MCP client - not just Warp's dashboard agent - can query
+// traffic and (where granted) change governance.
 //
 // Three rules hold for every tool here:
 //
-//  1. Read-only. No executor calls a write method, and Deps exposes nothing
-//     that could.
-//  2. Bounded. Every result passes through boundToolResult before it reaches
+//  1. Bounded. Every result passes through boundToolResult before it reaches
 //     a caller. One unbounded log query would otherwise put megabytes of
 //     prompt bodies into a model's context window.
-//  3. Scope-carrying. Executors take the caller's context and hand it straight
+//  2. Scope-carrying. Executors take the caller's context and hand it straight
 //     to the store, which applies the queryscope row filter. Losing that
 //     context means every query silently returns every row in the
 //     deployment, so it is never replaced with context.Background().
+//  3. No key material on a get or list. create_virtual_key returns the secret
+//     once; describe_virtual_key and list_virtual_keys never do. Writes that
+//     change what inference will accept must also reload the in-memory
+//     governance cache (see GovernanceReloader).
 //
 // One Deps value is shared across every concurrent caller, so nothing
 // caller-specific lives on it: each handler resolves the caller's default
@@ -72,6 +74,14 @@ const (
 
 	// DefaultLookback is the window used when the caller names no time range.
 	DefaultLookback = 24 * time.Hour
+
+	// MaxGovernanceRows caps every list_* of configured entities.
+	MaxGovernanceRows = 20
+
+	// VirtualKeyPrefix is the prefix governance.GenerateVirtualKey uses.
+	// Duplicated here because plugins/governance depends on framework, so this
+	// package cannot import it back.
+	VirtualKeyPrefix = "sk-bf-"
 )
 
 // Now is a package-level seam so tests can pin "now" and assert on the windows
@@ -88,9 +98,20 @@ type Deps struct {
 	// available. semantic_search_logs is the only tool that reaches it.
 	Semantic SemanticSearcher
 	// Governance is nil on a deployment whose config store does not implement
-	// GovernanceReader. describe_virtual_key is the only tool that reaches it,
-	// and reports itself unavailable rather than panicking on a nil pointer.
+	// GovernanceReader. Governance tools report themselves unavailable rather
+	// than panicking on a nil pointer.
 	Governance GovernanceReader
+	// Reloader is nil when no governance plugin is loaded. Write tools still
+	// persist, then report that the in-memory cache could not be refreshed.
+	Reloader GovernanceReloader
+	// Version is the running transport version. Empty when unknown.
+	Version string
+	// DisableDBPings skips store pings in get_health, matching
+	// client_config.disable_db_pings_in_health.
+	DisableDBPings bool
+	ConfigPing     Pinger
+	LogsPing       Pinger
+	VectorPing     Pinger
 }
 
 // Tool pairs a model-facing declaration with its executor. execute takes ctx
@@ -464,26 +485,6 @@ func intArg(args map[string]any, key string, fallback, max int) (int, error) {
 	return min(result, max), nil
 }
 
-// stringArg reads a required string argument.
-//
-// A discarded type assertion turns a present non-string into "", which the
-// caller then reports as a missing field - telling the model it forgot
-// something it actually sent, so it retries with the same wrong shape.
-func stringArg(args map[string]any, key string) (string, error) {
-	value, present := args[key]
-	if !present || value == nil {
-		return "", fmt.Errorf("%s is required", key)
-	}
-	text, ok := value.(string)
-	if !ok {
-		return "", fmt.Errorf("%s must be a string, got %T", key, value)
-	}
-	if strings.TrimSpace(text) == "" {
-		return "", fmt.Errorf("%s must not be empty", key)
-	}
-	return text, nil
-}
-
 // boolArg reads an optional boolean flag.
 //
 // A present non-boolean used to read as false, so a malformed include_content
@@ -499,6 +500,44 @@ func boolArg(args map[string]any, key string) (bool, error) {
 		return false, fmt.Errorf("%s must be a boolean, got %T", key, value)
 	}
 	return flag, nil
+}
+
+// stringArg reads a string argument, required or optional.
+//
+// A discarded type assertion turns a present non-string into "", which the
+// caller then reports as a missing field - telling the model it forgot
+// something it actually sent, so it retries with the same wrong shape.
+func stringArg(args map[string]any, key string, required bool) (string, error) {
+	raw, present := args[key]
+	if !present || raw == nil {
+		if required {
+			return "", fmt.Errorf("%s is required", key)
+		}
+		return "", nil
+	}
+	text, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string, got %T", key, raw)
+	}
+	text = strings.TrimSpace(text)
+	if required && text == "" {
+		return "", fmt.Errorf("%s is required", key)
+	}
+	return text, nil
+}
+
+func requireLogs(deps *Deps) error {
+	if deps == nil || deps.LogManager == nil {
+		return fmt.Errorf("log store is not available on this deployment")
+	}
+	return nil
+}
+
+func requireGovernance(deps *Deps) error {
+	if deps == nil || deps.Governance == nil {
+		return fmt.Errorf("governance is not available on this deployment")
+	}
+	return nil
 }
 
 // enumArg reads a string argument that the schema declares as an enum.
@@ -730,7 +769,33 @@ func buildTools() []Tool {
 		queryUsageByTool(),
 		queryModelsTool(),
 		describeFilterSpaceTool(),
+		queryMCPLogsTool(),
+		countMCPLogsTool(),
+		getMCPLogDetailTool(),
+		queryMCPMetricsTool(),
+		queryMCPUsageByTool(),
+		getSessionTool(),
+		getSessionSummaryTool(),
+		getDroppedRequestsTool(),
 		describeVirtualKeyTool(),
+		listVirtualKeysTool(),
+		listTeamsTool(),
+		describeTeamTool(),
+		listCustomersTool(),
+		describeCustomerTool(),
+		listBudgetsTool(),
+		describeBudgetTool(),
+		listProvidersTool(),
+		listMCPClientsTool(),
+		getHealthTool(),
+		getVersionTool(),
+		createVirtualKeyTool(),
+		updateVirtualKeyTool(),
+		deactivateVirtualKeyTool(),
+		rotateVirtualKeyTool(),
+		createTeamTool(),
+		createCustomerTool(),
+		createBudgetTool(),
 	}
 }
 

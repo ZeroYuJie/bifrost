@@ -92,3 +92,12 @@ func logsViewLink(filters *logstore.SearchFilters) string {
 	}
 	return logsViewPath + "?" + values.Encode()
 }
+
+const mcpLogsViewPath = "/workspace/mcp-logs"
+
+func mcpLogDetailLink(id string) string {
+	if id == "" {
+		return ""
+	}
+	return mcpLogsViewPath + "?" + url.Values{"selected_log": {id}}.Encode()
+}

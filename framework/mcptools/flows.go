@@ -189,7 +189,7 @@ func getLogDetailTool() Tool {
 			// turned a present non-string into "", so the tool answered "log_id is
 			// required" - and the model, believing it had omitted the field,
 			// retried with the same wrong shape.
-			id, err := stringArg(args, "log_id")
+			id, err := stringArg(args, "log_id", true)
 			if err != nil {
 				return nil, err
 			}

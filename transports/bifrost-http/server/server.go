@@ -338,12 +338,11 @@ func (s *GovernanceInMemoryStore) GetMCPClientBySlug(slug string) (string, strin
 	return s.Config.GetMCPClientBySlug(slug)
 }
 
-// registerBifrostMCPServer hosts Warp's read-only log/metrics/governance query
-// tools (framework/mcptools) as an ordinary MCP client named
-// warp.BifrostMCPClientName, reachable at /mcp/bifrost by any virtual-key-
-// authenticated MCP client. Ordinary is the point: it is persisted like a
-// user-added client, so VK grants, the dashboard's client picker and the
-// pricing lookup all work without special-casing it.
+// registerBifrostMCPServer hosts Bifrost's MCP tools (framework/mcptools) as an
+// ordinary MCP client named warp.BifrostMCPClientName, reachable at /mcp/bifrost
+// by any virtual-key-authenticated MCP client. Ordinary is the point: it is
+// persisted like a user-added client, so VK grants, the dashboard's client
+// picker and the pricing lookup all work without special-casing it.
 //
 // It runs after plugins load (the tools need the logging plugin's store) and
 // before ConnectConfiguredMCPClients. On a later boot the row already sits in
@@ -356,10 +355,20 @@ func (s *BifrostHTTPServer) registerBifrostMCPServer(ctx context.Context) {
 	warpService := s.WarpHandler.Service()
 	// A nil LogReader (logging disabled) still gets a server: every tool reports
 	// itself unavailable rather than panicking on a nil dependency.
+	disableDBPings := false
+	if s.Config.ClientConfig != nil {
+		disableDBPings = s.Config.ClientConfig.DisableDBPingsInHealth
+	}
 	server := mcptools.NewServer(&mcptools.Deps{
-		LogManager: warpService.LogReader(),
-		Semantic:   warpService.SemanticSearcher(),
-		Governance: warpService.GovernanceReader(),
+		LogManager:     warpService.LogReader(),
+		Semantic:       warpService.SemanticSearcher(),
+		Governance:     warpService.GovernanceReader(),
+		Reloader:       s,
+		Version:        handlers.GetVersion(),
+		DisableDBPings: disableDBPings,
+		ConfigPing:     s.Config.ConfigStore,
+		LogsPing:       s.Config.LogsStore,
+		VectorPing:     s.Config.VectorStore,
 	})
 	if s.Config.MCPConfig != nil {
 		for _, existing := range s.Config.MCPConfig.ClientConfigs {
