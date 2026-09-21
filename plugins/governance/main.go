@@ -40,6 +40,7 @@ type Config struct {
 
 type InMemoryStore interface {
 	GetConfiguredProviders() map[schemas.ModelProvider]configstore.ProviderConfig
+	GetConfiguredProviderNames() []string
 	GetMCPClientsAllowedByDefault() map[string]string // clientID → clientName
 	GetMCPClientNames() map[string]string             // clientID → clientName, every client
 	// GetMCPClientBySlug resolves a client by its endpoint slug (for serving one client at /mcp/<slug>).
@@ -950,9 +951,19 @@ func (p *GovernancePlugin) ResolveAccess(ctx *schemas.BifrostContext) (schemas.A
 	if len(bases) == 0 && scoping == nil {
 		return nil, nil
 	}
-	access := grant.NewAccess(bases, scoping, mode, p.modelMatcher())
+	access := grant.NewAccess(bases, scoping, mode, p.modelMatcher(), grant.WithConfiguredProviders(p.configuredProviders()))
 	g.SetAccess(access)
 	return access, nil
+}
+
+// configuredProviders is how an access answers for a permit that grants every provider: that permit
+// names none, so the deployment's own set is what it grants. Read at call time rather than captured,
+// so a provider added after the request resolved is granted by the same rule.
+func (p *GovernancePlugin) configuredProviders() grant.ProviderLister {
+	if p.inMemoryStore == nil {
+		return nil
+	}
+	return p.inMemoryStore.GetConfiguredProviderNames
 }
 
 // modelMatcher is how an access resolves a model name against a provider's allowed-models list:

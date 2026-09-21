@@ -23,6 +23,14 @@ func (m *mockInMemoryStore) GetConfiguredProviders() map[schemas.ModelProvider]c
 	return m.configuredProviders
 }
 
+func (m *mockInMemoryStore) GetConfiguredProviderNames() []string {
+	names := make([]string, 0, len(m.configuredProviders))
+	for provider := range m.configuredProviders {
+		names = append(names, string(provider))
+	}
+	return names
+}
+
 func (m *mockInMemoryStore) GetMCPClientsAllowedByDefault() map[string]string {
 	return m.allowedByDefaultClients
 }

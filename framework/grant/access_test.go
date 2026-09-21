@@ -1665,3 +1665,79 @@ func assertPermitsAre(t *testing.T, got []schemas.Permit, want ...schemas.Permit
 		assert.Same(t, want[i], got[i], "permit %d", i)
 	}
 }
+
+// A permit that grants every provider names none, so the answers that are a list of providers have
+// nothing to enumerate and must be completed from the deployment's own set. Without this, a permit
+// meaning "every provider, with overrides for these two" reads as "only these two", and the listing
+// and routing layers that consume those lists refuse what the request path admits.
+func TestAllowAllProvidersCompletesTheProviderLists(t *testing.T) {
+	// The shape a deployment actually has: allow-all, plus one provider permit carrying an override.
+	newBase := func() *Permit {
+		return newPermit(permitSpec{
+			Type: PermitVirtualKey, ID: "vk1", Name: "Caller Key",
+			AllowAllProviders: true,
+			ProviderPermits: []schemas.ProviderPermit{
+				{Provider: "bedrock", AllowedModels: []string{"*"}, Weight: ptr(1.0), KeyIDs: []string{"key-1"}},
+			},
+		})
+	}
+
+	t.Run("granted providers include one no permit names", func(t *testing.T) {
+		access := NewAccess(held(newBase()), nil, "", nil, configured("bedrock", "anthropic", "openai"))
+
+		assert.ElementsMatch(t, []string{"bedrock", "anthropic", "openai"}, access.GrantedProvidersForModel("claude-haiku-4-5"))
+	})
+
+	t.Run("candidates include one no permit names, unweighted and unrestricted", func(t *testing.T) {
+		access := NewAccess(held(newBase()), nil, "", nil, configured("bedrock", "anthropic"))
+
+		candidates := access.ProvidersForModel("claude-haiku-4-5")
+		require.Len(t, candidates, 2)
+		byProvider := map[string]schemas.ProviderCandidate{}
+		for _, candidate := range candidates {
+			byProvider[candidate.Provider] = candidate
+		}
+		// Weight is something a provider permit expresses, so a provider none names carries none.
+		// Load balancing drops unweighted candidates, which is why adding them cannot change which
+		// provider it selects — only what the routing trail is able to name.
+		require.Contains(t, byProvider, "anthropic")
+		assert.Nil(t, byProvider["anthropic"].Weight)
+		assert.Equal(t, schemas.WhiteList{Wildcard}, byProvider["anthropic"].KeyIDs)
+		assert.Equal(t, ptr(1.0), byProvider["bedrock"].Weight)
+	})
+
+	t.Run("a provider its own permit refuses is not reopened", func(t *testing.T) {
+		base := newPermit(permitSpec{
+			Type: PermitVirtualKey, ID: "vk1", Name: "Caller Key",
+			AllowAllProviders: true,
+			ProviderPermits: []schemas.ProviderPermit{
+				{Provider: "openai", AllowedModels: []string{"gpt-4o"}},
+			},
+		})
+		access := NewAccess(held(base), nil, "", nil, configured("openai", "anthropic"))
+
+		// openai holds a permit and that permit does not allow this model; allow-all governs only
+		// providers nothing ruled on.
+		assert.Equal(t, []string{"anthropic"}, access.GrantedProvidersForModel("claude-haiku-4-5"))
+	})
+
+	t.Run("an intersecting scope is not widened", func(t *testing.T) {
+		scoping := newPermit(permitSpec{
+			Type: PermitProject, ID: "p1", Name: "Project",
+			ProviderPermits: []schemas.ProviderPermit{
+				{Provider: "bedrock", AllowedModels: []string{"*"}},
+			},
+		})
+		access := NewAccess(held(newBase()), scoping, Intersect, nil, configured("bedrock", "anthropic"))
+
+		// The caller may reach every provider, the project only bedrock, and an intersection is the
+		// narrower of the two.
+		assert.Equal(t, []string{"bedrock"}, access.GrantedProvidersForModel("claude-haiku-4-5"))
+	})
+
+	t.Run("a resolver that supplied no provider set answers as before", func(t *testing.T) {
+		access := NewAccess(held(newBase()), nil, "", nil)
+
+		assert.Equal(t, []string{"bedrock"}, access.GrantedProvidersForModel("claude-haiku-4-5"))
+	})
+}

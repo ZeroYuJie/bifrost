@@ -39,10 +39,24 @@ type ModelMatcher func(provider, model string, allowed []string) bool
 // There is one scoping slot, not a list. A request is scoped by at most one thing at a time, and
 // composing under one mode is what keeps every answer here decidable.
 type Access struct {
-	bases   []schemas.Permit
-	scoping schemas.Permit
-	mode    CompositionMode
-	matcher ModelMatcher
+	bases     []schemas.Permit
+	scoping   schemas.Permit
+	mode      CompositionMode
+	matcher   ModelMatcher
+	providers ProviderLister
+}
+
+// ProviderLister answers which providers the deployment has configured, in the names permits use.
+type ProviderLister func() []string
+
+// AccessOption configures an Access at construction, so a resolver that has nothing extra to give
+// is unaffected.
+type AccessOption func(*Access)
+
+// WithConfiguredProviders supplies the deployment's provider set, so the listing methods can answer
+// for a permit that grants every provider.
+func WithConfiguredProviders(providers ProviderLister) AccessOption {
+	return func(a *Access) { a.providers = providers }
 }
 
 // NewAccess folds the permits the caller holds together with the permit scoping this request,
@@ -52,7 +66,7 @@ type Access struct {
 // that layer knows what it asked and what answered. Passing no scoping permit leaves the mode
 // irrelevant and the answer is the caller's permits alone. Nil entries in bases are dropped, so a
 // resolver that found nothing for one source does not have to say so twice.
-func NewAccess(bases []schemas.Permit, scoping schemas.Permit, mode CompositionMode, matcher ModelMatcher) *Access {
+func NewAccess(bases []schemas.Permit, scoping schemas.Permit, mode CompositionMode, matcher ModelMatcher, opts ...AccessOption) *Access {
 	held := make([]schemas.Permit, 0, len(bases))
 	for _, base := range bases {
 		if !isNilPermit(base) {
@@ -62,12 +76,16 @@ func NewAccess(bases []schemas.Permit, scoping schemas.Permit, mode CompositionM
 	if isNilPermit(scoping) {
 		scoping = nil
 	}
-	return &Access{
+	access := &Access{
 		bases:   held,
 		scoping: scoping,
 		mode:    mode,
 		matcher: matcher,
 	}
+	for _, opt := range opts {
+		opt(access)
+	}
+	return access
 }
 
 // Bases implements schemas.Access.
@@ -230,8 +248,12 @@ func (a *Access) ProvidersForModel(model string) []schemas.ProviderCandidate {
 	}
 
 	candidates := make([]schemas.ProviderCandidate, 0, a.providerPermitCount())
+	// Every provider a permit names, offered or not: one whose permit refuses this model must not be
+	// reopened below as though nothing had ruled on it.
+	named := make(map[string]struct{})
 	a.eachProviderPermit(func(owner schemas.Permit, pp *schemas.ProviderPermit, isBase bool) bool {
 		provider := pp.Provider
+		named[provider] = struct{}{}
 		// Three separate questions, none of which implies another. Whether the composed access
 		// permits the pair at all:
 		if !a.IsModelAllowed(provider, model) {
@@ -285,6 +307,15 @@ func (a *Access) ProvidersForModel(model string) []schemas.ProviderCandidate {
 		return true
 	})
 
+	for _, provider := range a.providersGrantedByAllowAll(named, model) {
+		// Nothing named it, so it carries no routing preference and no key restriction: a weight is
+		// something a provider permit expresses, and a provider none narrowed may use any of its keys.
+		candidates = append(candidates, schemas.ProviderCandidate{
+			Provider: provider,
+			KeyIDs:   schemas.WhiteList{Wildcard},
+		})
+	}
+
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -292,7 +323,8 @@ func (a *Access) ProvidersForModel(model string) []schemas.ProviderCandidate {
 }
 
 // GrantedProvidersForModel implements schemas.Access. Because this gate cannot ask ProvidersForModel
-// anything, the composition it needs is re-derived by name below.
+// anything, the composition it needs is re-derived by name below, then completed with the providers
+// granted by nothing but an allow-all permit, which name no provider permit to re-derive from.
 func (a *Access) GrantedProvidersForModel(model string) []string {
 	if a == nil {
 		return nil
@@ -324,7 +356,38 @@ func (a *Access) GrantedProvidersForModel(model string) []string {
 		allowed = append(allowed, pp.Provider)
 		return true
 	})
+	for _, provider := range a.providersGrantedByAllowAll(seen, model) {
+		allowed = append(allowed, provider)
+	}
 	return allowed
+}
+
+// providersGrantedByAllowAll returns the configured providers this access permits for model that no
+// provider permit named, so a permit granting every provider is not read as granting only the ones
+// it happens to hold an override for. seen is the set already answered for and is extended here.
+//
+// Permission is asked per provider through IsModelAllowed rather than decided here: it is the same
+// question the request path asks, composition and blacklists included, so the two cannot drift. A
+// resolver that supplied no provider set leaves the answer exactly as it was.
+func (a *Access) providersGrantedByAllowAll(seen map[string]struct{}, model string) []string {
+	if a.providers == nil {
+		return nil
+	}
+	var granted []string
+	for _, provider := range a.providers() {
+		if provider == "" {
+			continue
+		}
+		if _, dup := seen[provider]; dup {
+			continue
+		}
+		if !a.IsModelAllowed(provider, model) {
+			continue
+		}
+		seen[provider] = struct{}{}
+		granted = append(granted, provider)
+	}
+	return granted
 }
 
 // eachProviderPermit visits the provider permits the request could be served from: every provider

@@ -26,11 +26,20 @@ type permitSpec struct {
 
 	ProviderPermits []schemas.ProviderPermit
 	MCPPermits      []schemas.MCPPermit
+	// AllowAllProviders grants providers the spec names no provider permit for.
+	AllowAllProviders bool
 }
 
 // newPermit builds a Permit from a named spec.
 func newPermit(spec permitSpec) *Permit {
-	return NewPermit(spec.Type, spec.ID, spec.Name, spec.IsActive, spec.IsExpired, spec.ProviderPermits, spec.MCPPermits)
+	return NewPermit(spec.Type, spec.ID, spec.Name, spec.IsActive, spec.IsExpired, spec.ProviderPermits, spec.MCPPermits,
+		WithAllowAllProviders(spec.AllowAllProviders))
+}
+
+// configured supplies a deployment's provider set to NewAccess, for the answers that are a list of
+// providers rather than a decision about one.
+func configured(providers ...string) AccessOption {
+	return WithConfiguredProviders(func() []string { return providers })
 }
 
 // held wraps the permits a caller holds for NewAccess, in the order given. A nil entry is passed
