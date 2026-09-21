@@ -1701,7 +1701,7 @@ func (provider *BedrockProvider) ChatCompletionStream(ctx *schemas.BifrostContex
 						content := streamEvent.Delta.ToolUse.Input
 						response := &schemas.BifrostChatResponse{
 							ID:     id,
-							Model:  request.Model,
+							Model:  responseModel(ctx, request.Model),
 							Object: "chat.completion.chunk",
 							Choices: []schemas.BifrostResponseChoice{
 								{
@@ -1770,7 +1770,7 @@ func (provider *BedrockProvider) ChatCompletionStream(ctx *schemas.BifrostContex
 		normalizeUsage()
 
 		// Send final chunk with accumulated usage
-		response := providerUtils.CreateBifrostChatCompletionChunkResponse(id, usage, finishReason, chunkIndex, request.Model, 0)
+		response := providerUtils.CreateBifrostChatCompletionChunkResponse(id, usage, finishReason, chunkIndex, responseModel(ctx, request.Model), 0)
 		// Set raw request if enabled
 		if providerUtils.ShouldSendBackRawRequest(ctx, provider.sendBackRawRequest) {
 			providerUtils.ParseAndSetRawRequest(&response.ExtraFields, jsonData)
@@ -4090,7 +4090,7 @@ func (provider *BedrockProvider) CountTokens(ctx *schemas.BifrostContext, key sc
 		if isCountTokensUnsupported(bifrostErr) {
 			estimated := estimateTokenCount(jsonData)
 			return &schemas.BifrostCountTokensResponse{
-				Model:       request.Model,
+				Model:       responseModel(ctx, request.Model),
 				InputTokens: estimated,
 				TotalTokens: &estimated,
 				Object:      "response.input_tokens",
@@ -4117,7 +4117,7 @@ func (provider *BedrockProvider) CountTokens(ctx *schemas.BifrostContext, key sc
 	}
 
 	// Convert to Bifrost format
-	response := bedrockResponse.ToBifrostCountTokensResponse(request.Model)
+	response := bedrockResponse.ToBifrostCountTokensResponse(responseModel(ctx, request.Model))
 
 	response.ExtraFields.Latency = latency.Milliseconds()
 	response.ExtraFields.ProviderResponseHeaders = providerResponseHeaders
