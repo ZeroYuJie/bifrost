@@ -14,6 +14,10 @@ machine only (currently `aws-useast-bala-sub2api-001`). Keep its AWS credentials
 on that machine. This rule takes precedence over test commands below that
 would otherwise call live provider APIs; propagate it to delegated agents.
 
+Build production executables on the target server with its native OS,
+architecture, and CGO toolchain. Verify the executable's GOOS/GOARCH before
+deployment; local workstation binaries are not deployment artifacts.
+
 ## What is Bifrost?
 
 Bifrost is a high-performance AI gateway that unifies 20+ LLM providers behind a single OpenAI-compatible API with ~11µs overhead at 5,000 RPS. It also serves as an MCP (Model Context Protocol) gateway, turning static chat models into tool-calling agents.

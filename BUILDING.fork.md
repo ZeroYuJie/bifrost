@@ -13,7 +13,10 @@ go mod edit \
   -replace=github.com/maximhq/bifrost/framework=../framework
 ```
 
-Then build (Linux target, with embedded UI):
+Build the production executable on the target Linux server with its native Go
+and GCC toolchains. Upload the UI assets and patched source to an isolated
+build directory first; do not deploy a workstation executable. Then build
+with embedded UI:
 
 ```bash
 # 1. UI assets (needs Node; outputs to transports/bifrost-http/ui)
