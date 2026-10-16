@@ -1,65 +1,160 @@
-# Building this fork
+# Maintaining this Bifrost fork
 
-Upstream `transports/go.mod` resolves `core`/`framework` from the Go module
-proxy, which does NOT contain this fork's patches. Point them at the in-repo
-sources before building (equivalent to the upstream go.work dev flow):
+Read [AGENTS.md](AGENTS.md#first-rule--aws-bedrock-execution-boundary) before
+release work. Its Bedrock execution boundary and native server build rule
+apply to every command below and to delegated work.
+
+## Main branch and release baseline
+
+| Item | Maintained value |
+| --- | --- |
+| Fork repository | `ZeroYuJie/bifrost`, remote `fork` |
+| Maintained/default branch | `main`, tracking `fork/main` |
+| Official upstream | `maximhq/bifrost`, remote `origin` |
+| Integrated HTTP release | `transports/v2.3.0` |
+| Upstream release commit | `9237ec06672406e437b3cb33fc793ffd0403b3ae` |
+| Validated production code | `adaca95d2`, version `v2.3.0-fork.adaca95d2` |
+| Last production acceptance | 2026-10-16, Asia/Shanghai |
+
+`main` contains the upstream release and the fork's patches. Preserve its
+history with ordinary merges and fast-forward pushes. Keep `origin` read-only;
+publish this fork to `fork`, never to `origin`. Upstream `main`/`dev` are useful
+for investigation but are not automatic deployment targets. Retain old patch
+and upgrade branches as history unless the user requests cleanup.
+
+The receipt on `aws-useast-bala-sub2api-001` is
+`/home/webserver/app/bifrost/release-v2.3.0.json`. It records the binary checksum,
+source commit, server acceptance, and backup location. A later documentation
+commit does not change the deployed binary's code revision. Update this table
+and the receipt after each accepted release; never infer production state from
+repository HEAD.
+
+## Differences owned by the fork
+
+1. **Bedrock response model aliases.** `responseModel` in
+   `core/providers/bedrock/utils.go` and its call sites in `bedrock.go` return
+   the caller-facing alias while leaving request/wire models unchanged.
+   Preserve Chat/Responses unary and streaming responses, lifecycle/final
+   chunks and post-hooks; Titan/Cohere/Nova embeddings; rerank; images;
+   CountTokens including estimates; and Anthropic InvokeModel unary/streaming
+   paths. Regression coverage lives in `responsemodel_test.go`.
+2. **OpenAI-to-Bedrock regression coverage.** `between_tools` is an upstream
+   feature, not a private thinking implementation. Keep
+   `TestBetweenToolsOpenAIJSONToConverse` in
+   `core/providers/bedrock/adaptivethinkingdisplay_test.go`: raw Chat/Responses
+   JSON, token-limit precedence, opaque profile aliases, and exact outgoing
+   thinking/effort fields.
+
+Inspect new provider branches as well as conflicts at every upgrade. Resolve
+by preserving behavior, rather than mechanically retaining an old patched
+line. Retire a private implementation only when the new official tag without
+it passes the same regressions and necessary authorized server acceptance.
+Keep useful regression tests after retiring implementation code.
+
+## Following upstream releases
+
+The weekly check is advisory: inspect official GitHub Releases for
+`transports/v*`, exclude drafts/prereleases, and distinguish HTTP releases from
+CLI/core/framework/plugin releases. GitHub's generic latest release can refer
+to the CLI. Report new versions, official links, dates in Asia/Shanghai,
+relevant fixes, migrations, and toolchain changes. Stay quiet when there is no
+new version or material new risk.
+
+The check does not merge, push, build, contact production, or deploy. Upgrading
+starts from a user-selected formal release. Before changes, record worktree
+state, HEAD, remote main, chosen tag and peeled commit, release notes,
+dependencies, migration implications, and patch risks. Preserve unrelated
+work; do not auto-stash, reset, or force-push it away.
+
+For a chosen version, replace `vX.Y.Z` with that exact release:
 
 ```bash
-cd transports/bifrost-http
-# note: the transports go.mod lives one level up (transports/), so the
-# relative paths are ../core and ../framework, not ../../
-go mod edit \
-  -replace=github.com/maximhq/bifrost/core=../core \
-  -replace=github.com/maximhq/bifrost/framework=../framework
+set -eu
+git fetch --no-tags fork main
+git switch main
+git merge --ff-only fork/main
+git fetch --no-tags origin refs/tags/transports/vX.Y.Z:refs/tags/transports/vX.Y.Z
+git switch -c codex/upgrade-bifrost-vX.Y.Z
+git merge --no-ff transports/vX.Y.Z
 ```
 
-Build the production executable on the target Linux server with its native Go
-and GCC toolchains. Upload the UI assets and patched source to an isolated
-build directory first; do not deploy a workstation executable. Then build
-with embedded UI:
+Keep build-time module replacements in an isolated build tree, outside the
+maintained source diff. After validation, merge the upgrade branch into
+`main`, push `fork/main` without force, fetch it back, and prove local and
+remote commit IDs match. If another writer advanced remote main, integrate
+those commits and revalidate before pushing.
+
+## Offline verification
+
+From `core/`, using the Go version required by `go.mod`:
 
 ```bash
-# 1. UI assets (needs Node; outputs to transports/bifrost-http/ui)
-cd ui && npm ci && npm run build && npm run copy-build
-
-# 2. Binary (needs Go 1.27+, CGO, gcc for sqlite)
-cd transports/bifrost-http
-CGO_ENABLED=1 go build \
-  -ldflags "-w -s -X main.Version=dev-fork.2" \
-  -trimpath -tags "sqlite_static" \
-  -o bifrost-http .
+go test ./providers/bedrock -run 'BetweenTools|Adaptive|ResponseModel|ConverseReasoning' -count=1
+go test ./schemas ./providers/anthropic -run 'BetweenTools|ReasoningTypeSurvivesChatResponsesConversion' -count=1
+go test -race ./providers/bedrock -run '^(TestInvokeResponseModel|TestResponseModel|TestResponseModelPostHookRunnerNilSafety|TestInvokeAnthropicResponsesStream_RetryableException_ChunkIsRetryable)$' -count=1 -timeout=120s
 ```
 
-The `go mod edit -replace` changes are local build-tree state — do not commit
-them; keep the fork diff limited to the patch itself.
+These tests use pure conversions or loopback mocks with fake credentials.
+Do not substitute broad provider/live commands on the workstation. Run checks
+appropriate to changed paths; documentation-only merges do not require
+repeating unchanged runtime tests. If the streaming alias wrapper changes,
+compare `ns/op` and `allocs/op` from the existing
+`BenchmarkResponseModelPostHookRunner`.
 
-## Syncing upstream
+## Native server build
 
-This branch is a private patch branch (no PR upstream). To keep it current:
+Use an isolated source directory on the target server. UI assets are static;
+prefer building them there too when Node is available. From that source root,
+use separate subshells so paths remain valid:
 
 ```bash
-git fetch origin
-git checkout main && git merge --ff-only origin/main
-git push fork main
-git checkout fix/bedrock-alias-response-model
-git rebase main
-git push fork fix/bedrock-alias-response-model --force-with-lease
+set -eu
+(cd ui && npm ci && npm run build)
+
+FORK_VERSION="vX.Y.Z-fork.<source-commit>"
+(
+  cd transports
+  go mod edit \
+    -replace=github.com/maximhq/bifrost/core=../core \
+    -replace=github.com/maximhq/bifrost/framework=../framework
+  cd bifrost-http
+  CGO_ENABLED=1 go build \
+    -ldflags "-w -s -X main.Version=${FORK_VERSION}" \
+    -trimpath -tags sqlite_static -o ../../bifrost-candidate .
+)
+file bifrost-candidate
+go version -m bifrost-candidate
+sha256sum bifrost-candidate
 ```
 
-Conflicts, if any, will be near the `responseModel(...)` call sites in
-`core/providers/bedrock/bedrock.go` — resolve by keeping the patched call.
-Then rebuild and redeploy per the steps above. If upstream ever implements
-equivalent behavior (response model echoes the caller-facing name), retire
-this branch and go back to stock releases.
+Inspect target OS/architecture and native GCC/CGO dependencies before building.
+Verify artifact GOOS/GOARCH and source hashes against the target and reviewed
+commit. Local core/framework replacements are essential: published modules
+omit the fork's core patches. Never commit the temporary `go.mod` edits. Use
+release module requirements rather than lowering Go versions for a workstation.
 
-## v2.3.0 upgrade and between-tools thinking
+## Server validation and deployment
 
-The `codex/upgrade-bifrost-v2.3.0` branch merges `transports/v2.3.0`
-(`9237ec06672406e437b3cb33fc793ffd0403b3ae`) without rewriting the private
-patch history. The Bedrock alias response patch is retained, including the new
-Nova embedding branch and Anthropic InvokeModel unary/streaming paths. Build
-with the local core/framework replacements above;
-an unmodified official binary does not include these patches.
+First validate the candidate on an isolated server port and database copies.
+Authorized real Bedrock checks run there, with credentials remaining there.
+Check raw outbound thinking type, caller effort, token cap, returned alias,
+text, and affected unary/streaming paths. Check health and database integrity
+after migration.
+
+Before production cutover, obtain explicit restart/deployment authorization.
+Retain the old binary, config and startup scripts, and consistent snapshots of
+every existing SQLite database via SQLite's backup API or while fully stopped.
+Do not copy a live `.db` alone while ignoring its WAL. Config/log migrations
+can be separate and irreversible; rollback can require restoring databases
+as well as the old executable.
+
+Replace the binary atomically and use the existing startup method. Verify
+version, health, configuration entity counts, and authorized server inference
+acceptance; retain evidence and stop temporary instances. Report merge, push,
+build, deployment, and acceptance as separate facts. A repository merge alone
+never authorizes another restart.
+
+## Sonnet 5.5 request contract
 
 For OpenAI Chat Completions requests targeting Sonnet 5.5, send:
 
@@ -81,15 +176,5 @@ An application inference profile with an opaque `model_id` must retain
 `model_name: "anthropic.claude-sonnet-5-5"` in its alias configuration so the
 converter recognises the model's capabilities.
 
-Run these offline checks from `core/` using Go 1.27:
-
-```bash
-go test ./providers/bedrock -run 'BetweenTools|Adaptive|ResponseModel|ConverseReasoning' -count=1
-go test ./schemas ./providers/anthropic -run 'BetweenTools|ReasoningTypeSurvivesChatResponsesConversion' -count=1
-```
-
-`TestBetweenToolsOpenAIJSONToConverse` covers raw OpenAI Chat/Responses JSON,
-token-limit precedence, and opaque profile aliases. It verifies conversion and
-serialization without calling AWS. Before replacing a deployed binary, retain
-the old binary, snapshot each SQLite database through SQLite's backup API, and
-keep `config.json` and the existing startup scripts.
+Recheck explicit capability overrides during upgrades. The token cap still
+bounds total output, including any thinking generated in tool workflows.

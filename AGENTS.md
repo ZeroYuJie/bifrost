@@ -18,6 +18,15 @@ Build production executables on the target server with its native OS,
 architecture, and CGO toolchain. Verify the executable's GOOS/GOARCH before
 deployment; local workstation binaries are not deployment artifacts.
 
+## Fork Maintenance
+
+Before branch synchronization, release upgrades, builds, or deployment, read
+[BUILDING.fork.md](BUILDING.fork.md). It defines the maintained `fork/main`
+branch, formal release baseline, patch contracts, verification, and rollback.
+Follow its merge workflow rather than rebasing or force-pushing published
+fork history. Weekly release checks are advisory and do not authorize upgrades
+or production changes.
+
 ## What is Bifrost?
 
 Bifrost is a high-performance AI gateway that unifies 20+ LLM providers behind a single OpenAI-compatible API with ~11µs overhead at 5,000 RPS. It also serves as an MCP (Model Context Protocol) gateway, turning static chat models into tool-calling agents.
