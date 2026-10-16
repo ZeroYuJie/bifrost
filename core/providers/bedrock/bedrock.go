@@ -4688,6 +4688,31 @@ func (provider *BedrockProvider) invokeStreamHeaders(extraParams map[string]any)
 	return out
 }
 
+// responseModelPostHookRunner keeps alias rewriting in the existing stream
+// pipeline, before post-hooks observe it. Requests without an alias reuse the
+// original runner; aliased streams retain only the alias and runner until close.
+func responseModelPostHookRunner(ctx *schemas.BifrostContext, runner schemas.PostHookRunner) schemas.PostHookRunner {
+	alias := schemas.GetResolvedAlias(ctx)
+	if alias == nil || alias.Key == "" {
+		return runner
+	}
+	model := alias.Key
+	return func(ctx *schemas.BifrostContext, result *schemas.BifrostResponse, bifrostErr *schemas.BifrostError) (*schemas.BifrostResponse, *schemas.BifrostError) {
+		if result != nil {
+			if result.ChatResponse != nil {
+				result.ChatResponse.Model = model
+			}
+			if result.ResponsesStreamResponse != nil && result.ResponsesStreamResponse.Response != nil {
+				result.ResponsesStreamResponse.Response.Model = model
+			}
+		}
+		if runner == nil {
+			return result, bifrostErr
+		}
+		return runner(ctx, result, bifrostErr)
+	}
+}
+
 func (provider *BedrockProvider) invokeAnthropicChatCompletion(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostChatRequest) (*schemas.BifrostChatResponse, *schemas.BifrostError) {
 	requestURL, region := provider.invokeURL(ctx, key, request.Model, bedrockInvokeAction)
 	request, guardrailBody, err := invokeChatGuardTagging(request)
@@ -4697,13 +4722,17 @@ func (provider *BedrockProvider) invokeAnthropicChatCompletion(ctx *schemas.Bifr
 		}
 		return nil, providerUtils.NewBifrostOperationError(schemas.ErrProviderRequestMarshal, err)
 	}
-	return anthropic.HandleAnthropicChatCompletionRequest(
+	response, bifrostErr := anthropic.HandleAnthropicChatCompletionRequest(
 		ctx, provider.mantleClient, requestURL, request,
 		provider.invokeBuildConfig(request.Model, false, false, guardrailBody),
 		openai.BearerAuthHeader(key), invokeGuardrailHeaders(provider.networkConfig.ExtraHeaders, chatExtraParams(request)),
 		provider.invokeSigner(ctx, key, requestURL, bedrockInvokeAccept, region),
 		provider.logger,
 	)
+	if response != nil {
+		response.Model = responseModel(ctx, response.Model)
+	}
+	return response, bifrostErr
 }
 
 func (provider *BedrockProvider) invokeAnthropicChatCompletionStream(ctx *schemas.BifrostContext, postHookRunner schemas.PostHookRunner, postHookSpanFinalizer func(context.Context), key schemas.Key, request *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
@@ -4730,7 +4759,7 @@ func (provider *BedrockProvider) invokeAnthropicChatCompletionStream(ctx *schema
 		provider.networkConfig.BetaHeaderOverrides,
 		providerUtils.ShouldSendBackRawRequest(ctx, provider.sendBackRawRequest),
 		providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse),
-		provider.GetProviderKey(), postHookRunner, nil,
+		provider.GetProviderKey(), responseModelPostHookRunner(ctx, postHookRunner), nil,
 		provider.invokeSigner(ctx, key, requestURL, bedrockInvokeStreamAccept, region),
 		provider.logger, postHookSpanFinalizer,
 	)
@@ -4745,13 +4774,17 @@ func (provider *BedrockProvider) invokeAnthropicResponses(ctx *schemas.BifrostCo
 		}
 		return nil, providerUtils.NewBifrostOperationError(schemas.ErrProviderRequestMarshal, err)
 	}
-	return anthropic.HandleAnthropicResponsesRequest(
+	response, bifrostErr := anthropic.HandleAnthropicResponsesRequest(
 		ctx, provider.mantleClient, requestURL, request,
 		provider.invokeBuildConfig(request.Model, false, true, guardrailBody),
 		openai.BearerAuthHeader(key), invokeGuardrailHeaders(provider.networkConfig.ExtraHeaders, responsesExtraParams(request)),
 		provider.invokeSigner(ctx, key, requestURL, bedrockInvokeAccept, region),
 		provider.logger,
 	)
+	if response != nil {
+		response.Model = responseModel(ctx, response.Model)
+	}
+	return response, bifrostErr
 }
 
 func (provider *BedrockProvider) invokeAnthropicResponsesStream(ctx *schemas.BifrostContext, postHookRunner schemas.PostHookRunner, postHookSpanFinalizer func(context.Context), key schemas.Key, request *schemas.BifrostResponsesRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
@@ -4775,7 +4808,7 @@ func (provider *BedrockProvider) invokeAnthropicResponsesStream(ctx *schemas.Bif
 		provider.networkConfig.BetaHeaderOverrides,
 		providerUtils.ShouldSendBackRawRequest(ctx, provider.sendBackRawRequest),
 		providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse),
-		provider.GetProviderKey(), postHookRunner, nil,
+		provider.GetProviderKey(), responseModelPostHookRunner(ctx, postHookRunner), nil,
 		provider.invokeSigner(ctx, key, requestURL, bedrockInvokeStreamAccept, region),
 		provider.logger, postHookSpanFinalizer,
 	)

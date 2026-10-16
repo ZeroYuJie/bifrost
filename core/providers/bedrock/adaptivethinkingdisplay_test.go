@@ -2,9 +2,11 @@ package bedrock
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/maximhq/bifrost/core/providers/anthropic"
+	"github.com/maximhq/bifrost/core/providers/openai"
 	providerUtils "github.com/maximhq/bifrost/core/providers/utils"
 	"github.com/maximhq/bifrost/core/schemas"
 )
@@ -451,5 +453,111 @@ func TestConvertChatParameters_BetweenToolsOpus5Xhigh(t *testing.T) {
 	}
 	if raw, ok := bedrockReq.AdditionalModelRequestFields.Get("thinking"); ok {
 		t.Errorf("thinking = %+v, want omitted: Opus 5 rejects disabled at xhigh", raw)
+	}
+}
+
+// Exercise the OpenAI ingress decoders as well as the Bedrock converter. An
+// application inference profile has an opaque wire ID, so its model_name must
+// retain the Sonnet 5.5 capability while the wire ID remains unchanged.
+func TestBetweenToolsOpenAIJSONToConverse(t *testing.T) {
+	models := []struct {
+		name         string
+		requestModel string
+		wireModel    string
+		alias        bool
+	}{
+		{"direct", betweenToolsModel, betweenToolsModel, false},
+		{"application_profile_alias", "sonnet-production", "4gnd8iceukh0", true},
+	}
+	cases := []struct {
+		name          string
+		body          string
+		responses     bool
+		wantMaxTokens int64
+	}{
+		{
+			name:          "chat_legacy_max_tokens",
+			body:          `{"model":%q,"messages":[{"role":"user","content":"hello"}],"max_tokens":512,"reasoning":{"type":"between_tools","effort":"low","max_tokens":2048,"display":"summarized"}}`,
+			wantMaxTokens: 512,
+		},
+		{
+			name:          "chat_max_completion_tokens",
+			body:          `{"model":%q,"messages":[{"role":"user","content":"hello"}],"max_completion_tokens":768,"reasoning":{"type":"between_tools","effort":"low"}}`,
+			wantMaxTokens: 768,
+		},
+		{
+			name:          "chat_max_completion_tokens_takes_precedence",
+			body:          `{"model":%q,"messages":[{"role":"user","content":"hello"}],"max_tokens":17,"max_completion_tokens":1024,"reasoning":{"type":"between_tools","effort":"low"}}`,
+			wantMaxTokens: 1024,
+		},
+		{
+			name:          "responses_max_output_tokens",
+			body:          `{"model":%q,"input":"hello","max_output_tokens":1536,"reasoning":{"type":"between_tools","effort":"low","max_tokens":2048,"summary":"detailed"}}`,
+			responses:     true,
+			wantMaxTokens: 1536,
+		},
+	}
+	for _, model := range models {
+		for _, tc := range cases {
+			t.Run(model.name+"/"+tc.name, func(t *testing.T) {
+				ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+				if model.alias {
+					ctx.SetValue(schemas.BifrostContextKeyResolvedAlias, &schemas.ResolvedAlias{
+						Key: model.requestModel,
+						Config: &schemas.AliasConfig{
+							ModelID:   model.wireModel,
+							ModelName: schemas.Ptr("claude-sonnet-5-5"),
+						},
+					})
+				}
+				body := []byte(fmt.Sprintf(tc.body, "bedrock/"+model.requestModel))
+				var outbound *BedrockConverseRequest
+				var err error
+				if tc.responses {
+					var inbound openai.OpenAIResponsesRequest
+					if err := schemas.Unmarshal(body, &inbound); err != nil {
+						t.Fatalf("decode OpenAI Responses JSON: %v", err)
+					}
+					request := inbound.ToBifrostResponsesRequest(ctx)
+					if request.Provider != schemas.Bedrock || request.Model != model.requestModel {
+						t.Fatalf("OpenAI Responses ingress parsed provider/model as %q/%q", request.Provider, request.Model)
+					}
+					request.Model = model.wireModel // Core resolves the key alias before provider conversion.
+					outbound, err = ToBedrockResponsesRequest(ctx, request)
+				} else {
+					var inbound openai.OpenAIChatRequest
+					if err := schemas.Unmarshal(body, &inbound); err != nil {
+						t.Fatalf("decode OpenAI Chat JSON: %v", err)
+					}
+					request := inbound.ToBifrostChatRequest(ctx)
+					if request.Provider != schemas.Bedrock || request.Model != model.requestModel {
+						t.Fatalf("OpenAI Chat ingress parsed provider/model as %q/%q", request.Provider, request.Model)
+					}
+					request.Model = model.wireModel
+					outbound, err = ToBedrockChatCompletionRequest(ctx, request)
+				}
+				if err != nil {
+					t.Fatalf("convert to Bedrock Converse: %v", err)
+				}
+				if outbound.ModelID != model.wireModel {
+					t.Errorf("wire model = %q, want %q", outbound.ModelID, model.wireModel)
+				}
+				wire, err := providerUtils.MarshalSorted(outbound)
+				if err != nil {
+					t.Fatalf("marshal Bedrock Converse: %v", err)
+				}
+				if got := providerUtils.GetJSONField(wire, "inferenceConfig.maxTokens").Int(); got != tc.wantMaxTokens {
+					t.Errorf("inferenceConfig.maxTokens = %d, want %d; body: %s", got, tc.wantMaxTokens, wire)
+				}
+				// Exact object equality also rejects display, budget_tokens, and any
+				// other field that Bedrock forbids alongside between_tools.
+				if got := providerUtils.GetJSONField(wire, "additionalModelRequestFields.thinking").Raw; got != `{"type":"between_tools"}` {
+					t.Errorf("thinking = %s, want only between_tools; body: %s", got, wire)
+				}
+				if got := providerUtils.GetJSONField(wire, "additionalModelRequestFields.output_config.effort").String(); got != "low" {
+					t.Errorf("output_config.effort = %q, want low; body: %s", got, wire)
+				}
+			})
+		}
 	}
 }

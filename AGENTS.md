@@ -2,6 +2,18 @@
 
 > Context for AI agents (Claude Code, Copilot, Cursor, etc.) working on this codebase. Read this fully before making changes.
 
+## First Rule — AWS Bedrock Execution Boundary
+
+**Never initiate AWS Bedrock requests from the local workstation**, including
+inference, control-plane calls, live tests, SDK credential checks, or local
+gateway requests that would forward to Bedrock. Local verification is limited
+to offline conversion tests and loopback mocks with fake credentials.
+
+Execute any authorized real Bedrock validation on the user-designated remote
+machine only (currently `aws-useast-bala-sub2api-001`). Keep its AWS credentials
+on that machine. This rule takes precedence over test commands below that
+would otherwise call live provider APIs; propagate it to delegated agents.
+
 ## What is Bifrost?
 
 Bifrost is a high-performance AI gateway that unifies 20+ LLM providers behind a single OpenAI-compatible API with ~11µs overhead at 5,000 RPS. It also serves as an MCP (Model Context Protocol) gateway, turning static chat models into tool-calling agents.
