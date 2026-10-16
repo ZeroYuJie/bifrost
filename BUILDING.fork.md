@@ -22,6 +22,12 @@ publish this fork to `fork`, never to `origin`. Upstream `main`/`dev` are useful
 for investigation but are not automatic deployment targets. Retain old patch
 and upgrade branches as history unless the user requests cleanup.
 
+GitHub Actions is disabled for this fork. The inherited workflow files are
+retained for upstream comparison, but include automatic releases and scheduled
+live tests. Keep them inactive; enabling fork-specific CI requires an explicit
+decision and must respect the server execution boundary. The weekly advisory
+check runs separately and does not enable Actions.
+
 The receipt on `aws-useast-bala-sub2api-001` is
 `/home/webserver/app/bifrost/release-v2.3.0.json`. It records the binary checksum,
 source commit, server acceptance, and backup location. A later documentation
