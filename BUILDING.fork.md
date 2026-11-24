@@ -150,13 +150,15 @@ set -eu
 (cd ui && npm ci && npm run build)
 
 FORK_VERSION="vX.Y.Z-fork.<source-commit>"
+export GOTMPDIR="$(pwd)/.go-build-tmp"
+mkdir -p "$GOTMPDIR"
 (
   cd transports
   go mod edit \
     -replace=github.com/maximhq/bifrost/core=../core \
     -replace=github.com/maximhq/bifrost/framework=../framework
   cd bifrost-http
-  CGO_ENABLED=1 go build \
+  CGO_ENABLED=1 GOWORK=off go build -p 1 \
     -ldflags "-w -s -X main.Version=${FORK_VERSION}" \
     -trimpath -tags sqlite_static -o ../../bifrost-candidate .
 )
@@ -166,6 +168,14 @@ sha256sum bifrost-candidate
 ```
 
 Inspect target OS/architecture and native GCC/CGO dependencies before building.
+Check available RAM and use a disk-backed Go temporary directory. On the current
+target `/tmp` is tmpfs, so a cold compile there competes with the running gateway
+for memory. Keep the completed Go build cache when retrying the same source and
+toolchain. If the server cannot run the UI type checker with capacity to spare,
+run `npm ci`, `npm exec -- vite build`, and `npm run copy-build` in the isolated
+server tree. Run `npm run typecheck` offline from the same UI source and generated
+route types before accepting those assets.
+
 Verify artifact GOOS/GOARCH and source hashes against the target and reviewed
 commit. Local core/framework replacements are essential: published modules
 omit the fork's core patches. Never commit the temporary `go.mod` edits. Use
