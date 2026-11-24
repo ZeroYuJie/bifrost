@@ -315,6 +315,40 @@ func TestResponseModelPostHookRunnerNilSafety(t *testing.T) {
 	require.Equal(t, "alias", result.ChatResponse.Model)
 }
 
+// Compare the old temporary string header with pointers to existing fields.
+// Both assignments target pooled state, so escapes match the real setup path.
+func BenchmarkResponsesStreamModel(b *testing.B) {
+	for _, strategy := range []string{"before", "after"} {
+		for _, name := range []string{"no-alias", "alias"} {
+			b.Run(strategy+"/"+name, func(b *testing.B) {
+				ctx := testBedrockCtx()
+				if name == "alias" {
+					ctx.SetValue(schemas.BifrostContextKeyResolvedAlias, &schemas.ResolvedAlias{Key: "alias"})
+				}
+				request := &schemas.BifrostResponsesRequest{Model: "wire"}
+				state := acquireBedrockResponsesStreamState()
+				defer releaseBedrockResponsesStreamState(state)
+				assign := func() {
+					model := responseModel(ctx, request.Model)
+					state.Model = &model
+				}
+				if strategy == "after" {
+					assign = func() {
+						state.Model = &request.Model
+						if alias := schemas.GetResolvedAlias(ctx); alias != nil && alias.Key != "" {
+							state.Model = &alias.Key
+						}
+					}
+				}
+				b.ReportAllocs()
+				for b.Loop() {
+					assign()
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkResponseModel(b *testing.B) {
 	for _, name := range []string{"baseline", "no-alias", "alias"} {
 		b.Run(name, func(b *testing.B) {

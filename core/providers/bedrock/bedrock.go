@@ -2122,8 +2122,10 @@ func (provider *BedrockProvider) ResponsesStream(ctx *schemas.BifrostContext, po
 
 		// Create stream state for stateful conversions (used by Converse API path)
 		streamState := acquireBedrockResponsesStreamState()
-		responseModelName := responseModel(ctx, request.Model)
-		streamState.Model = &responseModelName
+		streamState.Model = &request.Model
+		if alias := schemas.GetResolvedAlias(ctx); alias != nil && alias.Key != "" {
+			streamState.Model = &alias.Key
+		}
 		streamState.Ctx = ctx
 		defer releaseBedrockResponsesStreamState(streamState)
 

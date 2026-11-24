@@ -45,6 +45,18 @@ overridden Bedrock endpoint fixture with fake credentials; it never needs a
 real AWS endpoint. Validate collection augment/filter locally; live/provider
 sweeps remain prohibited on the workstation.
 
+Request-path cost, measured with Go 1.27.4 on Apple M5 Pro (`-benchmem`, three
+runs): `BenchmarkResponseModel` median baseline/no-alias/alias is
+1.71/7.14/11.53 ns/op, all 0 B/op and 0 allocs/op. The existing Invoke wrapper
+benchmark is 0.67/0.66/1.62 ns/op respectively, also allocation-free per chunk.
+`BenchmarkResponsesStreamModel` measures the pooled-state assignment: the
+old temporary string costs 16 B and one allocation per stream (median
+14.18 ns no-alias, 17.43 ns alias); request/alias-field pointers cost 0 B and
+zero allocations (6.86/10.08 ns). No new cache or per-stream content buffer is
+retained; state keeps only a pointer to the already-retained request or alias
+field until the pooled stream state is released. These are microbenchmarks,
+not whole-gateway latency or production throughput measurements.
+
 The required native build toolchain is Go 1.27.4, CGO/GCC and Node 25 (the
 checked server toolchain is Node 25.9.0). Its missing `libatomic.so.1` is
 extracted from the Amazon Linux package into the isolated build-tools directory
