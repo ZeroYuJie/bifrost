@@ -11,8 +11,8 @@ apply to every command below and to delegated work.
 | Fork repository | `ZeroYuJie/bifrost`, remote `fork` |
 | Maintained/default branch | `main`, tracking `fork/main` |
 | Official upstream | `maximhq/bifrost`, remote `origin` |
-| Integrated HTTP release | `transports/v2.3.0` |
-| Upstream release commit | `9237ec06672406e437b3cb33fc793ffd0403b3ae` |
+| Integrated HTTP release | `transports/v2.6.0` |
+| Upstream release commit | `172617bb045c6f43d697843c115e64f0155ed143` |
 | Validated production code | `adaca95d2`, version `v2.3.0-fork.adaca95d2` |
 | Last production acceptance | 2026-10-16, Asia/Shanghai |
 
@@ -34,6 +34,26 @@ source commit, server acceptance, and backup location. A later documentation
 commit does not change the deployed binary's code revision. Update this table
 and the receipt after each accepted release; never infer production state from
 repository HEAD.
+
+The v2.6.0 source upgrade retains the response-model patches and the
+OpenAI-to-Converse regression. Its new `sendEvent` closure must call
+`responseModel` for ordinary Chat stream chunks; the final usage chunk alone
+does not preserve the contract. `TestConverseResponseModel` covers both APIs,
+unary/streaming, aliased/plain models, post-hooks, exact thinking fields and
+token caps against loopback mocks. Harness folder `372` uses the fully
+overridden Bedrock endpoint fixture with fake credentials; it never needs a
+real AWS endpoint. Validate collection augment/filter locally; live/provider
+sweeps remain prohibited on the workstation.
+
+The required native build toolchain is Go 1.27.4, CGO/GCC and Node 25 (the
+checked server toolchain is Node 25.9.0). Its missing `libatomic.so.1` is
+extracted from the Amazon Linux package into the isolated build-tools directory
+and supplied through `LD_LIBRARY_PATH`, without changing system packages.
+Rebuild external Go plugins with the same Go version if any are configured.
+Rehearse configstore/logstore migrations against copies of each database that
+actually exists. Source integration and a pending binary do not change the
+validated-production row above; update that only after authorized cutover and
+production acceptance.
 
 ## Differences owned by the fork
 

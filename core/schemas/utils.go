@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,6 +45,18 @@ func SecretVarAsString(e *SecretVar) string {
 		return e.ref
 	}
 	return e.GetValue()
+}
+
+// NewSecretVarMap wraps each value of a string map in a SecretVar via NewSecretVar.
+func NewSecretVarMap(values map[string]string) map[string]SecretVar {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]SecretVar, len(values))
+	for name, value := range values {
+		out[name] = *NewSecretVar(value)
+	}
+	return out
 }
 
 // knownProvidersMu protects concurrent access to knownProviders.
@@ -781,6 +794,9 @@ func DeepCopyChatMessage(original ChatMessage) ChatMessage {
 			copyRefusal := *original.ChatAssistantMessage.Refusal
 			copy.ChatAssistantMessage.Refusal = &copyRefusal
 		}
+		if len(original.ChatAssistantMessage.Context) > 0 {
+			copy.ChatAssistantMessage.Context = append(json.RawMessage(nil), original.ChatAssistantMessage.Context...)
+		}
 
 		// Deep copy Annotations
 		if original.ChatAssistantMessage.Annotations != nil {
@@ -835,6 +851,13 @@ func DeepCopyChatMessage(original ChatMessage) ChatMessage {
 				if toolCall.Function.Name != nil {
 					copyName := *toolCall.Function.Name
 					copyToolCall.Function.Name = &copyName
+				}
+				if toolCall.Custom != nil {
+					copyCustom := *toolCall.Custom
+					if toolCall.Custom.Name != nil {
+						copyCustom.Name = Ptr(*toolCall.Custom.Name)
+					}
+					copyToolCall.Custom = &copyCustom
 				}
 				if len(toolCall.ExtraContent) > 0 {
 					copyToolCall.ExtraContent = append(json.RawMessage(nil), toolCall.ExtraContent...)
@@ -947,6 +970,10 @@ func deepCopyChatContentBlock(original ChatContentBlock) ChatContentBlock {
 			copyMode := *original.PromptCacheBreakpoint.Mode
 			copyPromptCacheBreakpoint.Mode = &copyMode
 		}
+		if original.PromptCacheBreakpoint.TTL != nil {
+			copyTTL := *original.PromptCacheBreakpoint.TTL
+			copyPromptCacheBreakpoint.TTL = &copyTTL
+		}
 		copy.PromptCacheBreakpoint = copyPromptCacheBreakpoint
 	}
 
@@ -1021,9 +1048,23 @@ func DeepCopyChatTool(original ChatTool) ChatTool {
 		copyTool.Annotations = copyAnnotations
 	}
 
+	if original.MCP != nil {
+		copyTool.MCP = &MCPToolMetadata{
+			Title:         original.MCP.Title,
+			Icons:         slices.Clone(original.MCP.Icons),
+			OutputSchema:  slices.Clone(original.MCP.OutputSchema),
+			Meta:          slices.Clone(original.MCP.Meta),
+			UIResourceURI: original.MCP.UIResourceURI,
+			Visibility:    slices.Clone(original.MCP.Visibility),
+		}
+	}
+
 	// Deep copy Custom if present
 	if original.Custom != nil {
-		copyTool.Custom = &ChatToolCustom{}
+		copyTool.Custom = &ChatToolCustom{Name: original.Custom.Name}
+		if original.Custom.Description != nil {
+			copyTool.Custom.Description = Ptr(*original.Custom.Description)
+		}
 
 		if original.Custom.Format != nil {
 			copyFormat := &ChatToolCustomFormat{
@@ -1992,6 +2033,10 @@ func deepCopyResponsesMessageContentBlock(original ResponsesMessageContentBlock)
 			copyMode := *original.PromptCacheBreakpoint.Mode
 			copyPromptCacheBreakpoint.Mode = &copyMode
 		}
+		if original.PromptCacheBreakpoint.TTL != nil {
+			copyTTL := *original.PromptCacheBreakpoint.TTL
+			copyPromptCacheBreakpoint.TTL = &copyTTL
+		}
 		copy.PromptCacheBreakpoint = copyPromptCacheBreakpoint
 	}
 
@@ -2004,6 +2049,10 @@ func deepCopyResponsesMessageContentBlock(original ResponsesMessageContentBlock)
 	if original.Text != nil {
 		copyText := *original.Text
 		copy.Text = &copyText
+	}
+
+	if original.ToolName != nil {
+		copy.ToolName = new(*original.ToolName)
 	}
 
 	// Reasoning replay fields: Signature and EncryptedContent are echoed back
@@ -2426,6 +2475,20 @@ func IsPerplexityDeciderModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(model), "pplx-decider")
 }
 
+// IsBasetenDecisionModel checks if the model is one of Baseten's decision models
+// ("decision-models/baseten-joey-2b-latest"), served on Model APIs' /v1/systemone
+// rather than chat. Baseten namespaces all of them under decision-models/.
+func IsBasetenDecisionModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(model), "decision-models/")
+}
+
+// IsGeminiDecisionModel checks if the model is a Gemini Decision model
+// ("gemini-decision-1"), served on the Gemini API's /v1beta/decisions rather
+// than generateContent. The API's "models/" resource prefix is accepted.
+func IsGeminiDecisionModel(model string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(strings.ToLower(model), "models/"), "gemini-decision-")
+}
+
 // ollamaDecisionModelPrefixes are the System One model families in Ollama's
 // library, served on its /v1/systemone endpoint rather than chat.
 var ollamaDecisionModelPrefixes = []string{"nimble", "tev1", "clef", "laya"}
@@ -2441,6 +2504,33 @@ func IsOllamaDecisionModel(model string) bool {
 		}
 	}
 	return false
+}
+
+// IsMicrosoftDecisionModel checks if the model is one of Microsoft's decision models
+// on Azure ("Microsoft-Decision-1"), served on the resource's systemone endpoint rather
+// than chat. The match is on the model name, so a deployment named otherwise is
+// recognized only when its key's deployments map it from that name. Later versions
+// share the prefix.
+func IsMicrosoftDecisionModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(model), "microsoft-decision")
+}
+
+// IsDatabricksDecisionModel checks if the model answers decisions natively on Databricks:
+// the ai_decide AI Function, served on the workspace's AI Functions endpoint and matched
+// on its exact name, or a System One model (see IsDatabricksSystemOneModel).
+func IsDatabricksDecisionModel(model string) bool {
+	return strings.EqualFold(model, "ai_decide") || IsDatabricksSystemOneModel(model)
+}
+
+// IsDatabricksSystemOneModel checks if the model is a System One model service that a
+// workspace's Unity Gateway serves on its systemone endpoint: an OpenJev or TypeSafe AI
+// Jev model, by its Unity Catalog name ("system.ai.openjev-qwen35-4b",
+// "system.ai.typesafeai-jev-1-14-0"). The endpoint takes only Unity Catalog names, so
+// their serving endpoint names ("databricks-openjev-qwen35-4b") do not match. Later
+// versions share the prefixes.
+func IsDatabricksSystemOneModel(model string) bool {
+	name, ok := strings.CutPrefix(strings.ToLower(model), "system.ai.")
+	return ok && (strings.HasPrefix(name, "openjev") || strings.HasPrefix(name, "typesafeai-jev"))
 }
 
 // BedrockModelSupportsCachePoints reports whether the Bedrock model supports

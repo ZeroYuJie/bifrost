@@ -33,6 +33,33 @@ if (!appDir) {
 // control character; the fixture answers InvokeAgent with bytes shaped like that.
 const eventStream = Buffer.concat([Buffer.from([0, 0, 0, 24, 0, 0, 0, 0, 0, 0, 0, 0]), Buffer.from("fixture-event")]);
 
+// Valid Converse frames for the fork's streaming alias regression. This fixture
+// overrides every AWS endpoint and uses synthetic credentials only.
+function converseEvent(type, value) {
+	const crc32 = (bytes) => {
+		let crc = 0xffffffff;
+		for (const byte of bytes) {
+			crc ^= byte;
+			for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+		}
+		return (crc ^ 0xffffffff) >>> 0;
+	};
+	const headers = Buffer.concat(Object.entries({ ":message-type": "event", ":event-type": type, ":content-type": "application/json" }).map(([name, text]) => {
+		const n = Buffer.from(name), v = Buffer.from(text), prefix = Buffer.alloc(4);
+		prefix[0] = n.length;
+		prefix[1] = 7; // AWS EventStream string value
+		prefix.writeUInt16BE(v.length, 2);
+		return Buffer.concat([prefix.subarray(0, 1), n, prefix.subarray(1), v]);
+	}));
+	const payload = Buffer.from(JSON.stringify(value)), prelude = Buffer.alloc(12);
+	prelude.writeUInt32BE(16 + headers.length + payload.length, 0);
+	prelude.writeUInt32BE(headers.length, 4);
+	prelude.writeUInt32BE(crc32(prelude.subarray(0, 8)), 8);
+	const body = Buffer.concat([prelude, headers, payload]), checksum = Buffer.alloc(4);
+	checksum.writeUInt32BE(crc32(body));
+	return Buffer.concat([body, checksum]);
+}
+
 // The gateway needs a pricing datasheet on first start; serving an empty one from the control port keeps
 // the whole run offline, so the HTTPS_PROXY tripwire can stay armed.
 const endpoints = createTlsEndpoints({
@@ -62,6 +89,21 @@ const endpoints = createTlsEndpoints({
 		if (/\/guardrail\/[^/]+\/version\/[^/]+\/apply$/.test(url)) {
 			return { status: 200, headers: { "X-Amzn-Requestid": "req-guardrail" }, body: JSON.stringify({ action: "NONE", outputs: [], assessments: [] }) };
 		}
+		// Converse on an application inference profile (the alias below): a minimal valid answer, so a case can read
+		// the request body the gateway built for an opaque profile ID from /__connects.
+		if (/^\/model\/.*application-inference-profile.*\/converse-stream$/.test(url)) {
+			const events = [
+				["messageStart", { role: "assistant" }],
+				["contentBlockDelta", { delta: { text: "OK" }, contentBlockIndex: 0 }],
+				["contentBlockStop", { contentBlockIndex: 0 }],
+				["messageStop", { stopReason: "end_turn" }],
+				["metadata", { usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } }],
+			];
+			return { status: 200, headers: { "Content-Type": "application/vnd.amazon.eventstream" }, chunks: events.map(([type, value]) => ({ delayMs: 0, data: converseEvent(type, value) })) };
+		}
+		if (/^\/model\/.*application-inference-profile.*\/converse$/.test(url)) {
+			return { status: 200, headers: { "Content-Type": "application/json", "X-Amzn-Requestid": "req-converse" }, body: JSON.stringify({ output: { message: { role: "assistant", content: [{ text: "OK" }] } }, stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, metrics: { latencyMs: 1 } }) };
+		}
 		return { status: 404, body: JSON.stringify({ message: "fixture does not serve " + url }) };
 	},
 });
@@ -87,6 +129,17 @@ const config = {
 						region: "us-west-2",
 						endpoints: { runtime: runtimeHost, control_plane: runtimeHost, mantle: runtimeHost, s3: s3Host, agent_runtime: agentHost },
 					},
+					// An application inference profile: the wire model is an opaque ARN, and only model_name says it is Claude.
+					aliases: {
+						"claude-app-profile": {
+							model_id: "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/fixtureprof01",
+							model_name: "anthropic.claude-sonnet-4-20250514-v1:0",
+						},
+						"claude-sonnet-5-5-profile": {
+							model_id: "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/fixtureprof55",
+							model_name: "anthropic.claude-sonnet-5-5",
+						},
+					},
 				},
 				// An API-key-only key, for the operations AWS does not accept API keys on. Weight 0 keeps it out of random key
 				// selection; a case picks it by name with x-bf-api-key.
@@ -102,6 +155,8 @@ const config = {
 				},
 			],
 			network_config: { max_retries: 0, default_request_timeout_in_seconds: 3, ca_cert_pem: endpoints.caPem },
+			// Off by default so no other case changes; a case opts in per request with x-bf-prompt-cache-auto-inject.
+			prompt_cache: { auto_inject: false },
 		},
 	},
 };

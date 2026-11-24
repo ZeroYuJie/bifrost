@@ -1,12 +1,2 @@
-- feat: export A2A client spans and the a2a.client.operation.duration metric
-- feat: add export_raw_payloads profile option
-- feat: add excluded_attributes profile option
-- feat: export bifrost.cost.* breakdown attributes
-- feat: read the typed LLM span payload
-- feat: OTLP exporters dial through the global API proxy
-- feat: strip exported content for virtual keys that turn content logging off
-- feat: implement HTTPTransportResponseHeadersHook as a no-op
-- fix: report effective status and add error_type to bifrost_error_requests_total
-- fix: honour the https scheme on OTLP HTTP metrics endpoints
-- fix: rename the per-replica datapoint label to bifrost_instance_id
-- chore: upgraded core to v1.12.0 and framework to v1.9.0
+- feat: optional `apply_trace_dimensions_to_child_spans` profile flag merges `x-bf-dim-*` dimensions onto every exported span; span attributes win on conflict, reserved keys are skipped (thanks [@devin-williams](https://github.com/devin-williams)!)
+- chore: upgraded Go to 1.27.4, core to v1.16.0 and framework to v1.13.0

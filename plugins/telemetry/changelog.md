@@ -1,9 +1,4 @@
-- feat: add app label to request-level metrics
-- feat: derive metric labels from the enrichment dimension registry
-- feat: key health and rotation metrics follow the new failure classes, including timeout and cancelled
-- feat: implement HTTPTransportResponseHeadersHook as a no-op
-- fix: label error metrics with the effective HTTP status instead of unknown
-- fix: apply plugin custom_labels and resolve the plugin per request after reloads
-- fix: record billed usage from cancelled and failed requests
-- fix: build each metric's label set in a fresh slice so custom labels do not alias
-- chore: upgraded core to v1.12.0 and framework to v1.9.0
+- feat: `bifrost_provider_queue_wait_seconds` histogram for time spent waiting for a provider worker
+- fix: `bifrost_upstream_latency_seconds` excludes provider queue wait (thanks [@sam-klaviyo](https://github.com/sam-klaviyo)!)
+- fix: `bifrost_active_requests` no longer leaks on streams cancelled before headers
+- chore: upgraded Go to 1.27.4, core to v1.16.0 and framework to v1.13.0

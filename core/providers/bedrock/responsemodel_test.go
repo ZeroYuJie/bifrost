@@ -47,6 +47,125 @@ func TestResponseModel(t *testing.T) {
 	}
 }
 
+// Keep the caller model on Converse events as well as the final usage chunk.
+// The v2.6.0 sendEvent refactor moved ordinary chunks away from the old alias
+// assignment. All traffic here is redirected to a loopback mock with a fake key.
+func TestConverseResponseModel(t *testing.T) {
+	for _, responses := range []bool{false, true} {
+		for _, streaming := range []bool{false, true} {
+			for _, alias := range []bool{false, true} {
+				name := "chat"
+				if responses {
+					name = "responses"
+				}
+				if streaming {
+					name += "/stream"
+				}
+				if alias {
+					name += "/alias"
+				}
+				t.Run(name, func(t *testing.T) {
+					wireModel, wantModel := "anthropic.claude-sonnet-5-5", "anthropic.claude-sonnet-5-5"
+					ctx := testBedrockCtx()
+					if alias {
+						wireModel, wantModel = "opaque-profile-id", "claude-sonnet-profile"
+						ctx.SetValue(schemas.BifrostContextKeyResolvedAlias, &schemas.ResolvedAlias{
+							Key: wantModel, Config: &schemas.AliasConfig{
+								ModelID: wireModel, ModelName: schemas.Ptr("claude-sonnet-5-5"),
+							},
+						})
+					}
+					ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						wantPath := "/model/" + wireModel + "/converse"
+						if streaming {
+							wantPath += "-stream"
+						}
+						if r.URL.Path != wantPath {
+							t.Errorf("wire path = %q, want %q", r.URL.Path, wantPath)
+						}
+						body, err := io.ReadAll(r.Body)
+						if err != nil {
+							t.Errorf("read mock request: %v", err)
+						}
+						if got := gjson.GetBytes(body, "additionalModelRequestFields.thinking").Raw; got != `{"type":"between_tools"}` {
+							t.Errorf("thinking = %s, want only between_tools", got)
+						}
+						if gjson.GetBytes(body, "additionalModelRequestFields.output_config.effort").String() != "low" || gjson.GetBytes(body, "inferenceConfig.maxTokens").Int() != 128 {
+							t.Errorf("effort or token limit changed: %s", body)
+						}
+						if !streaming {
+							w.Header().Set("Content-Type", "application/json")
+							_, _ = io.WriteString(w, `{"output":{"message":{"role":"assistant","content":[{"text":"hello"}]}},"stopReason":"end_turn","usage":{"inputTokens":3,"outputTokens":1,"totalTokens":4}}`)
+							return
+						}
+						w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+						writeEventStreamEvent(t, w, "messageStart", []byte(`{"role":"assistant"}`))
+						writeEventStreamEvent(t, w, "contentBlockDelta", []byte(`{"delta":{"text":"hello"},"contentBlockIndex":0}`))
+						writeEventStreamEvent(t, w, "contentBlockStop", []byte(`{"contentBlockIndex":0}`))
+						writeEventStreamEvent(t, w, "messageStop", []byte(`{"stopReason":"end_turn"}`))
+						writeEventStreamEvent(t, w, "metadata", []byte(`{"usage":{"inputTokens":3,"outputTokens":1,"totalTokens":4}}`))
+					}))
+					defer ts.Close()
+					provider := newTestProviderWithServer(t, ts)
+					chatReq := testChatRequest()
+					chatReq.Model = wireModel
+					chatReq.Params = &schemas.ChatParameters{MaxCompletionTokens: schemas.Ptr(128), Reasoning: &schemas.ChatReasoning{Type: schemas.Ptr("between_tools"), Effort: schemas.Ptr("low")}}
+					respReq := testResponsesRequest()
+					respReq.Model = wireModel
+					respReq.Params = &schemas.ResponsesParameters{MaxOutputTokens: schemas.Ptr(128), Reasoning: &schemas.ResponsesParametersReasoning{Type: schemas.Ptr("between_tools"), Effort: schemas.Ptr("low")}}
+					checkModel := func(model string) {
+						if model != wantModel {
+							t.Errorf("response model = %q, want %q", model, wantModel)
+						}
+					}
+					if streaming {
+						postHook := func(_ *schemas.BifrostContext, result *schemas.BifrostResponse, err *schemas.BifrostError) (*schemas.BifrostResponse, *schemas.BifrostError) {
+							if result != nil && result.ChatResponse != nil {
+								checkModel(result.ChatResponse.Model)
+							}
+							if result != nil && result.ResponsesStreamResponse != nil && result.ResponsesStreamResponse.Response != nil {
+								checkModel(result.ResponsesStreamResponse.Response.Model)
+							}
+							return result, err
+						}
+						var stream chan *schemas.BifrostStreamChunk
+						var bifrostErr *schemas.BifrostError
+						if responses {
+							stream, bifrostErr = provider.ResponsesStream(ctx, postHook, nil, testBedrockKey(), respReq)
+						} else {
+							stream, bifrostErr = provider.ChatCompletionStream(ctx, postHook, nil, testBedrockKey(), chatReq)
+						}
+						require.Nil(t, bifrostErr)
+						models := 0
+						for chunk := range stream {
+							require.Nil(t, chunk.BifrostError)
+							if chunk.BifrostChatResponse != nil {
+								checkModel(chunk.BifrostChatResponse.Model)
+								models++
+							}
+							if chunk.BifrostResponsesStreamResponse != nil && chunk.BifrostResponsesStreamResponse.Response != nil {
+								checkModel(chunk.BifrostResponsesStreamResponse.Response.Model)
+								models++
+							}
+						}
+						require.Greater(t, models, 1, "must check lifecycle chunks as well as the final response")
+					} else if responses {
+						result, bifrostErr := provider.Responses(ctx, testBedrockKey(), respReq)
+						require.Nil(t, bifrostErr)
+						checkModel(result.Model)
+					} else {
+						result, bifrostErr := provider.ChatCompletion(ctx, testBedrockKey(), chatReq)
+						require.Nil(t, bifrostErr)
+						checkModel(result.Model)
+					}
+					require.Equal(t, wireModel, chatReq.Model)
+					require.Equal(t, wireModel, respReq.Model)
+				})
+			}
+		}
+	}
+}
+
 // InvokeModel bypasses the Converse response converters. Keep the alias on
 // unary responses and every streaming lifecycle event without changing the
 // model used in the AWS URL or the request passed to the provider.
@@ -194,6 +313,26 @@ func TestResponseModelPostHookRunnerNilSafety(t *testing.T) {
 	require.Same(t, response, result)
 	require.Nil(t, gotErr)
 	require.Equal(t, "alias", result.ChatResponse.Model)
+}
+
+func BenchmarkResponseModel(b *testing.B) {
+	for _, name := range []string{"baseline", "no-alias", "alias"} {
+		b.Run(name, func(b *testing.B) {
+			ctx := testBedrockCtx()
+			if name == "alias" {
+				ctx.SetValue(schemas.BifrostContextKeyResolvedAlias, &schemas.ResolvedAlias{Key: "alias"})
+			}
+			resolve := func(_ *schemas.BifrostContext, model string) string { return model }
+			if name != "baseline" {
+				resolve = responseModel
+			}
+			response := &schemas.BifrostChatResponse{}
+			b.ReportAllocs()
+			for b.Loop() {
+				response.Model = resolve(ctx, "wire")
+			}
+		})
+	}
 }
 
 func BenchmarkResponseModelPostHookRunner(b *testing.B) {

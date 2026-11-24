@@ -1,115 +1,55 @@
-- feat: agent gateway runtime with A2A request, event and trace contracts, card discovery, A2A plugin pipeline, streaming, durable push delivery and opt-in private push callbacks; `schemas.Tracer` gains `ReleaseTrace`
-- feat: gpt live session schemas, live provider interface and openai implementation, with sideband attach routes, the `live_sideband` request type and delegation error recording
-- feat: add cloudflare workers ai provider with chat, responses, embeddings, model listing and native clef decisions
-- feat: inject any number of named provider-configured mcp tools into chat and responses requests, past tool filters, and execute them server side including streaming
-- feat: oauth_key_config mints bearer tokens for openai-compatible providers through a shared token cache, also used by databricks and github copilot
-- feat: normalise decision requests and answers to an openai-style list shape (map form deprecated) and add openai decision converters for the openai-format route
-- feat: native decision support for openai, perplexity, ollama and openrouter
-- feat: emulate decisions through responses only when the request is marked by convert_decision_to_responses
-- feat: Typesafe can back a custom provider (base_provider_type "typesafe") with its own name, keys, allowed_requests, request_path_overrides and keyless listing [@akshaydeo](https://github.com/akshaydeo)
-- feat: complexity router decision classifier support: RequestType on routing calls and decision cost tracking
-- feat: multimodal embedding input with per-item params for cohere, gemini, vertex, bedrock nova/titan and parasail
-- feat: shell and apply_patch tools, allowed_callers translation and gemini code execution on the responses api
-- feat: add ModelRetrieve operation for openai, anthropic, cohere, gemini, mistral and ollama
-- feat: xai realtime provider with client-secret minting; realtime events keep their own copy of raw bytes
-- feat: bedrock passthrough for InvokeAgent, knowledge-base Retrieve and ApplyGuardrail; pass through azure content filter annotations
-- feat: vertex aws workload identity federation and sdk-chain resolution for aws external_account json
-- feat: add ToolUsage.WebSearch usage and deprecate NumSearchQueries
-- feat: add IgnoreProviderCost to provider config
-- feat: add BifrostContextKeyCompatForceReasoningOnlyToResponses
-- feat: route chat requests with reasoning.mode to the responses api on openai and azure, and carry reasoning.summary through chat to responses conversion
-- feat: stamp the deepseek served model and read server_side_model from the datasheet
-- feat: classify provider failures (including timeout and cancelled), rotate keys past permanent per-key failures and carry provider retry hints on errors
-- feat: per-attempt first-token deadline for stream attempts with fallback handover
-- feat: requested_provider and requested_model on RoutingInfo and as reserved context keys
-- feat: Access.AllowsEveryModel for provider-wide model grants
-- feat: passthrough body model fields for governance checks
-- feat: require_public_target on MCP clients, enforced on every dial
-- feat: allowlisted private dialer for MCP OAuth
-- feat: capture, aggregate and inject upstream MCP server instructions, with per-client and total byte caps
-- feat: RefreshMCPClientTools for on-demand tool rediscovery
-- feat: detect dead MCP sessions on tool calls and reconnect; retry probe timeouts but not dead sessions or auth failures
-- feat: bound code mode execution with step, memory, source, log, tool-call, value and nesting limits
-- feat: process-wide HTTP client factory so MCP, OAuth, catalog sync and OTLP follow the global API proxy
-- feat: BifrostContextKeyGovernanceDisableContentLogging and bifrost.content_logging.disabled span attribute
-- feat: BifrostContextKeyLoadBalancerAttempt and LoadBalancerMetadataPrefix
-- feat: add HTTPTransportResponseHeadersHook and pooled HTTPResponseMetadata to HTTP transport plugins
-- feat: add Warp config schema, log embedding configuration, multi-model selection and agent error codes
-- feat: add BifrostContextKeyCacheLookup to carry the cache lookup outcome before a response exists
-- feat: add RawPayloadConsumer and raw request/response fields on LLM spans
-- feat: add StripTraceAttributes for per-connector attribute denylists
-- feat: add bifrost.cost.* attributes and BifrostContext.CalculateCostBreakdown for plugins
-- feat: add bifrost.app span attribute derived from User-Agent
-- feat: add TraceSessionID and TraceDimensions accessors for connector metric tags
-- feat: add typed LLMSpanData, SpanEnrichment and connector demand interfaces
-- feat: expose failure identity for pre-dispatch errors
-- feat: add BifrostGuardrailDetection for detect-only guardrail policy matches
-- feat: Bedrock guardrail selective evaluation: guardContent blocks (text and image) survive conversion, guardrailConfig accepts a validated tagSuffix and streamProcessingMode, InvokeModel reads X-Amzn-Bedrock-Guardrail* headers, and the same guard_content marker is available on Chat Completions content blocks (#7696) [@akshaydeo](https://github.com/akshaydeo)
-- chore: deprecate attribution context keys in favour of ctx.Grant() accessors
-- fix: gpt-5.6+ requests carrying cache_control are no longer switched to prompt_cache_options.mode "explicit"; markers still become prompt_cache_breakpoint (at most three in implicit mode, four when the caller sets explicit mode) [@akshaydeo](https://github.com/akshaydeo)
-- fix: report truncated Content-Length response streams and discard incomplete connections (thanks [@Constantine3](https://github.com/Constantine3)!)
-- fix: a tool_result flagged is_error keeps its status "incomplete" marker on the OpenAI Responses wire (#8195) (thanks [@shreyanshj10](https://github.com/shreyanshj10)!)
-- fix: Responses to chat conversion maps output_text to text on multi-part assistant turns (#8196) (thanks [@shreyanshj10](https://github.com/shreyanshj10)!)
-- fix: preserve cache_control, citations, prompt_cache_breakpoint and cachePoint in deepCopyChatContentBlock (#8215) (thanks [@Shashank2985](https://github.com/Shashank2985)!)
-- fix: Anthropic-compatible responses report stop_reason "stop_sequence" with the matched stop_sequence for Claude on Anthropic and Vertex, streaming and non-streaming (thanks [@jimseiwert](https://github.com/jimseiwert)!)
-- fix: Anthropic error envelope always uses a documented error.type, mapped from google.rpc status names or the HTTP status when needed (thanks [@jimseiwert](https://github.com/jimseiwert)!)
-- fix: Gemini/Vertex Responses conversion keeps function tools declared without input_schema and orders function responses to match the preceding calls (thanks [@jimseiwert](https://github.com/jimseiwert)!)
-- fix: chat streams converted from a Responses upstream send the assistant role exactly once, on the first chunk (#7693) (thanks [@hmdsefi](https://github.com/hmdsefi)!)
-- fix: preserve Mistral streaming text arrays and reject unsupported content blocks (thanks [@xujiantop-crypto](https://github.com/xujiantop-crypto)!)
-- fix: map chat completion n to Gemini candidateCount (#7388) (thanks [@axelray-dev](https://github.com/axelray-dev)!)
-- fix: record output items before closing open items on Gemini streaming Responses when parts and finishReason share a frame (#7341) (thanks [@wofiporia](https://github.com/wofiporia)!)
-- fix: strip the Claude Code billing header again when an effort-only system message comes first, and restore it in place for Anthropic attempts (#8039) [@akshaydeo](https://github.com/akshaydeo)
-- fix: infer http status for stream errors and key-selection failures
-- fix: skip catalog-inferred fallbacks on caller-fault errors; forward raw gemini logprobs
-- fix: refuse aggregate model listing with a direct key, return the provider's error for a refused direct key, and bind no session key for direct keys
-- fix: restore primary provider headers after exhausted fallbacks and name plugin-answered fallbacks in stream routing headers
-- fix: apply the global proxy to providers without their own and honour multi-entry no_proxy lists
-- fix: route every provider egress stack, auth client and url fetch through proxy_config, with https and ipv6 proxies
-- fix: build passthrough urls that stay on the provider host
-- fix: keep replicate file list pagination on the configured file endpoint
-- fix: validate azure realtime endpoint before use and contain websocket session panics
-- fix: fit output tokens and thinking budget per attempt after key selection
-- fix: clamp max_tokens and rewrite adaptive thinking for pre-adaptive claude models
-- fix: send custom tools as function tools when the datasheet marks them unsupported
-- fix: read default reasoning effort from the datasheet when deciding to strip sampling params
-- fix: add opt-out capability for reasoning.summary
-- fix: clear paired item ids when stripping rejected reasoning
-- fix: downgrade json_schema response_format to json_object on deepseek
-- fix: keep gemini responses-path parity for json mode, native tools, candidateCount, logprobs and urlContextMetadata
-- fix: normalize root schema compositions for claude tools on bedrock converse
-- fix: per-model tool schema policy for kimi on chat and responses
-- fix: carry anthropic mid-conversation tool changes through the responses representation
-- fix: disable genai raw-body passthrough for non-google providers and model garden models on vertex
-- fix: keep the vertex passthrough api version and poll veo operations in their own region
-- fix: preserve safeguard_results in streamed message_delta
-- fix: error on bedrock converse streams missing messageStop
-- fix: emit cachePoint after cached document blocks on bedrock converse
-- fix: keep reasoning item ids and encrypted tokens through bedrock converse and chat-to-responses replays; forward store
-- fix: preserve thinking block order for bare claude model ids
-- fix: computer tool actions array, computer tool muxing and server tool cache_control
-- fix: omit null logprobs on history output_text and keep stream extra_fields on the openai responses drop-in
-- fix: send only OpenAI embedding params to OpenAI-compatible providers; label Cohere embeddings_by_type
-- fix: gemini $ref tool outputs, vertex express auth and image/transcription extra params on fallbacks
-- fix: fan out gemini embedding taskType and title per entry
-- fix: capture raw request on bedrock and vertex embeddings
-- fix: forward anthropic extra params through bedrock conversion (thanks [@wangrat](https://github.com/wangrat)!)
-- fix: accept matching reasoning_effort and reasoning.effort (thanks [@Daltonganger](https://github.com/Daltonganger)!)
-- fix: align typesafe validation and fidelity with the typesafe sdk
-- fix: bound per-provider model list polls and resume pagination after the last returned id (thanks [@novai42](https://github.com/novai42)!)
-- fix: allow empty copilot key values for github app auth and distinguish 422 permission errors
-- fix: cohere replay thinking order, decisions tool_choice gate, served tier on chat bridge, bare sonar routing, mcp server_label, legacy prompt framing
-- fix: hold back retried stream errors from post-hooks
-- fix: end large-response previews on a utf-8 boundary
-- fix: float weighted key selection that ignores negative or non-finite weights
-- fix: session affinity skips direct-key fallbacks and caller key pins, drops bindings to removed keys in single-key pools, and falls back to sibling keys when a session-bound key is rejected outright
-- fix: read the message context before abandoning delivery
-- fix: route code-mode tool results through PostMCPHook before logging
-- fix: MCP agent loop keeps earlier turns, the turn-1 route and caller cache points
-- fix: keep the live MCP connection on a failed make-before-break re-dial and reconnect after a failed live-connection check
-- fix: preserve pending_verification through EnableClient and the connection checker
-- fix: report a rejected inbound bearer token separately from a missing one in token exchange
-- fix: treat only masked placeholders as keep-stored for OAuth credentials
-- fix: redact x-bf-vk in captured request headers
-- fix: add BifrostError.EffectiveHTTPStatus as the single source for the status a caller received
-- fix: add span attribute helpers for chat tools export
-- fix: defer trace completion for abandoned deliveries
+- feat: baseten - new provider for Model APIs and dedicated deployments: chat, Responses, embeddings, transcription, decisions through System One, image generation on dedicated deployments (including `/predict` URLs) and rerank on BEI deployments
+- feat: kimchi - new provider for chat, Responses, embeddings and list models (thanks [@arnasnn](https://github.com/arnasnn)!)
+- feat: machgen - new provider for image generation, image edit and async video generation (submit, retrieve, download), with model listing (thanks [@nishkarsh-machgen](https://github.com/nishkarsh-machgen)!)
+- feat: soniox - new provider for async speech-to-text, text-to-speech with streaming, speech sessions and real-time transcription
+- feat: sarvam - chat and model listing move to Token Factory v2, and Sarvam Prism serves decisions (thanks [@vikashmaddi-sarvam](https://github.com/vikashmaddi-sarvam)!)
+  <Warning>
+  `sarvam-30b` is no longer served. Use `sarvam-105b`.
+  </Warning>
+- feat: gemini - native decisions for `gemini-decision-*` models and an `input_file` part for PDFs, audio and video; empty or mistyped input is rejected before the call (thanks [@Xytronix](https://github.com/Xytronix)!)
+- feat: realtime - Gemini Live on the Gemini API and Vertex, Vertex Live through the GenAI native protocol, ElevenLabs Scribe and Soniox real-time transcription
+- feat: speech sessions - `SpeechSessionProvider` interface for incremental text-to-speech over a WebSocket, implemented by ElevenLabs and Soniox
+- feat: elevenlabs - passthrough and native WebSocket dialing for Scribe and text-to-dialogue, raw response kept for `with-timestamps`
+- feat: vertex - text-to-speech through Cloud Text-to-Speech (Chirp) and Gemini TTS models
+- feat: regex key aliases - `regex:` alias names over the requested model with `model_id` templates that reuse capture groups
+- feat: usage estimation - cancelled or timed-out chat, text and Responses streams get missing usage estimated with a tokenizer, marked in `usage.estimation`
+- feat: bedrock - native `outputConfig` structured output for supported models, with a one-time retry on the synthetic tool when Bedrock rejects the schema; `supports_native_structured_output` datasheet field
+- feat: custom tools - custom (freeform) tools are rewritten as function tools for every model without native support and restored as custom calls on chat and Responses, streaming included
+- feat: anthropic - forward `thinking.block_binding` with its beta header on the Claude API
+- feat: anthropic - fast mode for `claude-fable-5-2` on Vertex
+- feat: databricks - OAuth M2M secrets limited to specific scopes work through a scope fallback, and scope errors show the provider's message
+- feat: opencode - stable `x-opencode-session` header per virtual key, resolved from client headers (thanks [@sstreichan](https://github.com/sstreichan)!)
+- feat: files - Files API uploads stream from a `FileSource` instead of a byte slice on OpenAI and Azure
+- feat: websocket stream hooks return the pre-hook request, so raw relays can forward plugin edits
+- feat: `bifrost_provider_queue_wait_seconds` timing on the attempt window
+- fix: anthropic - mid-conversation system reminders keep one form across turns, decided from the emitted messages, with placement controlled by the `supports_native_mid_conversation_system` datasheet field; the `<system-reminder>` envelope drops its trailing newline and the cache breakpoint stays on the marked block
+- fix: vertex - Claude request bodies always end with `tools`, `system`, `messages` so prompt cache reads hit
+- fix: anthropic - streamed usage counts each cached prompt token once on chat, Responses and passthrough streams (thanks [@is911](https://github.com/is911) and [@wangkanai](https://github.com/wangkanai)!)
+- fix: prompt cache auto-injection checks an alias's canonical model (thanks [@bardrop](https://github.com/bardrop)!)
+- fix: `prompt_cache_options` reaches only models that accept it
+- fix: anthropic - a deferred web search is replayed without a made-up `web_search_tool_result`, and its late result stays in place on replay, Responses and streams
+- fix: anthropic - history with MCP or server-tool blocks no longer sends a roleless message to OpenAI-compatible providers; Responses items with no chat equivalent are dropped on the Responses-to-Chat fallback (thanks [@1AbdullahButt](https://github.com/1AbdullahButt)!)
+- fix: bedrock - `/anthropic/v1/messages` with `output_config.format` streams one well-formed text block, and plain-text answers are no longer lost
+- fix: bedrock - honour `network_config.base_url` and apply the dial-time address policy to the net/http client
+- fix: bedrock - a caller's `anthropic_beta` on Converse is merged with derived betas (thanks [@fus3r](https://github.com/fus3r)!)
+- fix: bedrock - InvokeModel keeps `tool_reference` blocks inside a client `tool_result` (thanks [@kunalgoesbyken](https://github.com/kunalgoesbyken)!)
+- fix: bedrock - Claude Responses requests with computer tools go through InvokeModel, and replayed `tool_use` blocks keep `toolset_name` (thanks [@davidelct](https://github.com/davidelct)!)
+- fix: vertex - Anthropic betas are sent in the `anthropic-beta` header, including on CountTokens
+- fix: bedrock mantle - unsupported effort-dependent sampling parameters are stripped for OpenAI models
+- fix: logprobs survive conversion between Chat Completions and Responses
+- fix: gemini - function calls without an ID get unique IDs and pair with responses in order
+- fix: chat custom tools keep the `name` and `description` nested under `custom`
+- fix: gemini - image `output_format` and `output_compression` map to Vertex image output options, and the Gemini API no longer receives options it rejects (thanks [@carlreid](https://github.com/carlreid)!)
+- fix: mistral - `reasoning_effort` follows the model's datasheet ladder
+- fix: elevenlabs - speech `with_timestamps` returns character times instead of null (thanks [@abmorrill4](https://github.com/abmorrill4)!)
+  <Warning>
+  Breaking for Go SDK users: `SpeechAlignment.CharStartTimesMs` / `CharEndTimesMs` are renamed to `CharacterStartTimesSeconds` / `CharacterEndTimesSeconds` (JSON `char_*_times_ms` → `character_*_times_seconds`).
+  </Warning>
+- fix: elevenlabs - non-streaming `wav` speech returns a real WAV file
+- fix: openai - empty `text`, `srt` and `vtt` transcriptions are valid responses
+- fix: openai - streaming speech on `tts-1` and `tts-1-hd` returns a 400
+- fix: gemini - audio `fileData` parts are no longer treated as transcription
+- fix: vertex - model listing on `us` and `eu` keys uses the regional endpoint host, and token errors show the underlying cause
+- fix: streams cancelled before the upstream's first byte run their terminal post-hooks
+- chore: brotli 1.2.8 and dependency updates
+- chore: upgraded Go to 1.27.4
