@@ -13,8 +13,8 @@ apply to every command below and to delegated work.
 | Official upstream | `maximhq/bifrost`, remote `origin` |
 | Integrated HTTP release | `transports/v2.6.0` |
 | Upstream release commit | `172617bb045c6f43d697843c115e64f0155ed143` |
-| Validated production code | `adaca95d2`, version `v2.3.0-fork.adaca95d2` |
-| Last production acceptance | 2026-10-16, Asia/Shanghai |
+| Validated production code | `5214ad9fd`, version `v2.6.0-fork.5214ad9fd` |
+| Last production acceptance | 2026-11-24 17:57, Asia/Shanghai |
 
 `main` contains the upstream release and the fork's patches. Preserve its
 history with ordinary merges and fast-forward pushes. Keep `origin` read-only;
@@ -29,7 +29,7 @@ decision and must respect the server execution boundary. The weekly advisory
 check runs separately and does not enable Actions.
 
 The receipt on `aws-useast-bala-sub2api-001` is
-`/home/webserver/app/bifrost/release-v2.3.0.json`. It records the binary checksum,
+`/home/webserver/app/bifrost/release-v2.6.0.json`. It records the binary checksum,
 source commit, server acceptance, and backup location. A later documentation
 commit does not change the deployed binary's code revision. Update this table
 and the receipt after each accepted release; never infer production state from
