@@ -115,6 +115,9 @@ const runtimeHost = `localhost:${runtimePort}`;
 // names on the fixture certificate.
 const s3Host = `bucket.${runtimeHost}`;
 const config = {
+	// This loopback fixture uses fake credentials. Keep fixture cases with no
+	// virtual key working when fresh gateways default to inference auth.
+	client: { enforce_auth_on_inference: false },
 	framework: { pricing: { pricing_url: `http://127.0.0.1:${controlPort}/pricing.json`, model_parameters_url: `http://127.0.0.1:${controlPort}/model-parameters.json`, mcp_library_sync_interval: 0 } },
 	providers: {
 		bedrock: {
